@@ -90,7 +90,7 @@ export class AIScheduler {
     }
   }
 
-  /** Called immediately before each actual request, including normalized variants. */
+  /** Called immediately before the single source-text request for each review. */
   acquireRequest(signal?: AbortSignal): Promise<void> {
     if (signal?.aborted) return Promise.reject(aborted());
     return new Promise<void>((resolve, reject) => {

@@ -35,6 +35,19 @@ test('no-hit and empty-dictionary moderate calls never submit AI', async () => {
   }
 });
 
+test('combined moderation normalizes keyword matching but sends only the source to AI', async () => {
+  const source = '前危-險\n詞後';
+  const mock = mockFetch();
+  const iris = createIris({ keywords: ['危险词'], ai: { apiKey: 'token', fetch: mock.fetch } });
+  const result = await iris.moderate(source);
+  assert.equal(result.keywordResult.hit, true);
+  assert.equal(result.keywordResult.normalizeString, '前危险词后');
+  assert.equal(result.aiResult.result, false);
+  assert.equal(result.isIllegal, true);
+  assert.equal(mock.calls.length, 1);
+  assert.equal(mock.calls[0].body.messages[0].content, source);
+});
+
 test('omitting AI config keeps keyword moderation active', async () => {
   const result = await createIris({ keywords: ['命中'] }).moderate('命中');
   assert.equal(result.isIllegal, true);
@@ -112,6 +125,7 @@ test('rejects invalid limits, tokens and obsolete options in JavaScript', async 
     { ai: { apiKey: 'x', rateLimit: { maxRequests: 1 } } },
     { ai: { apiKey: 'x', rateLimit: null } },
     { ai: { apiKey: 'x', minSeverity: 'general' } }, { ai: { apiKey: 'x', trigger: 'always' } },
+    { ai: { apiKey: 'x', reviewNormalized: true } },
     { ai: { apiKey: 'x', onError: 'throw' } }, { ai: { apiKey: 'x', fetch: 1 } },
     { ai: { apiKey: 'x', protocol: 'xml' } }, { ai: { apiKey: 'x', model: '' } },
     { ai: { apiKey: 'x', policy: 'custom' } }, { ai: { apiKey: 'x', structuredOutput: true } },

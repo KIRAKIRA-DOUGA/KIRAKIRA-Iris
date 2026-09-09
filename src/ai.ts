@@ -1,5 +1,5 @@
 import { IrisAIError } from './errors.js';
-import type { AIAssessment, AIOptions, AIResult, NormalizedText, ParsedAIResult } from './types.js';
+import type { AIAssessment, AIOptions, AIResult, ParsedAIResult } from './types.js';
 
 export const DEFAULT_AI_MODEL = 'nvidia/nemotron-3.5-content-safety:free';
 export const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
@@ -92,7 +92,7 @@ Return only JSON: {"result": boolean, "comment": "brief Chinese explanation", "c
 result=true means unsafe or disallowed. result=false means safe. Do not provide hidden reasoning.`;
 
 async function requestAssessment(
-  input: string, kind: 'source' | 'normalized', options: AIOptions, apiKey: string, signal?: AbortSignal,
+  input: string, options: AIOptions, apiKey: string, signal?: AbortSignal,
 ): Promise<AIAssessment> {
   const protocol = resolveProtocol(options);
   const model = options.model ?? DEFAULT_AI_MODEL;
@@ -141,7 +141,7 @@ async function requestAssessment(
       if (!record(choice.message) || typeof choice.message.content !== 'string') throw invalidResponse();
       const verdict = parseAIResponse(choice.message.content, protocol);
       return {
-        ...verdict, input: kind, model: typeof value.model === 'string' ? value.model : model,
+        ...verdict, input: 'source', model: typeof value.model === 'string' ? value.model : model,
         requestId: typeof value.id === 'string' ? value.id : null,
       };
     };
@@ -165,34 +165,30 @@ export function emptyAIResult(options: AIOptions | undefined, reason: AIResult['
   };
 }
 
-export function failedAIResult(options: AIOptions | undefined, error: unknown, assessments: AIAssessment[] = []): AIResult {
+export function failedAIResult(options: AIOptions | undefined, error: unknown): AIResult {
   const known = error instanceof IrisAIError ? error : new IrisAIError('NETWORK_ERROR', 'AI 审核失败。', null, true);
   return {
     ...emptyAIResult(options, known.code === 'QUEUE_FULL' ? 'queue-full' : null),
     status: known.code === 'QUEUE_FULL' ? 'dropped' : 'error', needsReview: true,
-    error: known.toJSON(), comment: known.message, assessments,
-    categories: [...new Set(assessments.flatMap(assessment => assessment.categories))],
+    error: known.toJSON(), comment: known.message,
   };
 }
 
 export async function reviewWithOpenRouter(
-  text: NormalizedText, options: AIOptions, signal: AbortSignal | undefined, acquireRequest: () => Promise<void>,
+  source: string, options: AIOptions, signal: AbortSignal | undefined, acquireRequest: () => Promise<void>,
 ): Promise<AIResult> {
   const result = emptyAIResult(options, null);
   try {
     const apiKey = options.apiKey;
     await acquireRequest();
-    result.assessments.push(await requestAssessment(text.source, 'source', options, apiKey, signal));
-    if ((options.reviewNormalized ?? true) && text.normalizeString && text.normalizeString !== text.source) {
-      await acquireRequest();
-      result.assessments.push(await requestAssessment(text.normalizeString, 'normalized', options, apiKey, signal));
-    }
+    const assessment = await requestAssessment(source, options, apiKey, signal);
+    result.assessments = [assessment];
     result.status = 'completed';
-    result.result = result.assessments.some(assessment => assessment.result);
-    result.categories = [...new Set(result.assessments.flatMap(assessment => assessment.categories))];
-    result.comment = result.assessments.map(assessment => `${assessment.input === 'source' ? '原文' : '归一化文本'}：${assessment.comment}`).join('\n');
+    result.result = assessment.result;
+    result.categories = assessment.categories;
+    result.comment = `原文：${assessment.comment}`;
     return result;
   } catch (error) {
-    return failedAIResult(options, error, result.assessments);
+    return failedAIResult(options, error);
   }
 }

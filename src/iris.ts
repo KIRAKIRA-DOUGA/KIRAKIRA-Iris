@@ -32,10 +32,10 @@ export class Iris {
     if (options.ai) {
       const ai = options.ai;
       if (typeof ai.apiKey !== 'string' || !ai.apiKey.trim()) throw new TypeError('ai.apiKey must be a nonempty token string.');
-      for (const key of ['trigger', 'minSeverity', 'onError']) {
+      for (const key of ['trigger', 'minSeverity', 'onError', 'reviewNormalized']) {
         if (key in ai) throw new TypeError(`ai.${key} was removed.`);
       }
-      for (const key of ['reviewNormalized', 'structuredOutput'] as const) booleanOption(ai[key], `ai.${key}`);
+      booleanOption(ai.structuredOutput, 'ai.structuredOutput');
       for (const key of ['timeoutMs', 'maxTokens', 'maxConcurrent'] as const) integer(ai[key], `ai.${key}`);
       integer(ai.maxQueueSize, 'ai.maxQueueSize', 0);
       if (ai.rateLimit !== undefined) {
@@ -64,18 +64,22 @@ export class Iris {
     });
   }
 
-  private normalize(input: string): NormalizedText {
+  private validateInput(input: string): void {
     if (typeof input !== 'string') throw new TypeError('Input must be a string.');
     if (input.length > this.maxInputLength) throw new RangeError(`Input exceeds maxInputLength (${this.maxInputLength} UTF-16 units).`);
+  }
+
+  private normalize(input: string): NormalizedText {
+    this.validateInput(input);
     return normalizeText(input);
   }
 
-  private async review(text: NormalizedText, signal?: AbortSignal) {
+  private async review(source: string, signal?: AbortSignal) {
     const ai = this.ai;
     if (!ai) return failedAIResult(undefined, new IrisAIError('MISSING_API_KEY', '请通过 ai.apiKey 传入 token 字符串。'));
     try {
       return await this.scheduler.run(
-        () => reviewWithOpenRouter(text, ai, signal, () => this.scheduler.acquireRequest(signal)), signal,
+        () => reviewWithOpenRouter(source, ai, signal, () => this.scheduler.acquireRequest(signal)), signal,
       );
     } catch (error) {
       return failedAIResult(ai, error);
@@ -89,9 +93,9 @@ export class Iris {
 
   /** AI only. Does not consult the keyword matcher. */
   async aiModerate(input: string, options: ModerateOptions = {}) {
-    const text = this.normalize(input);
+    this.validateInput(input);
     if (!input.trim()) return emptyAIResult(this.ai, 'empty-input');
-    return this.review(text, options.signal);
+    return this.review(input, options.signal);
   }
 
   /** Keywords always run. Every hit triggers optional AI, which cannot clear the hit. */
@@ -103,7 +107,7 @@ export class Iris {
     const keywordResult = this.matcher.check(text, this.maxMatches);
     const aiResult = !this.ai ? emptyAIResult(undefined, 'not-configured')
       : !keywordResult.hit ? emptyAIResult(this.ai, 'no-keyword-hit')
-      : await this.review(text, options.signal);
+      : await this.review(input, options.signal);
     return {
       isIllegal: keywordResult.hit || aiResult.result === true,
       needsReview: aiResult.needsReview, keywordResult, aiResult,

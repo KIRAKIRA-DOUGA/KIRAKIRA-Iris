@@ -80,7 +80,7 @@ test('long-running rate limits prune history without losing throughput', async (
 test('FIFO jobs share concurrency between moderate and aiModerate; overflow drops the newest', async () => {
   const requests = [];
   const iris = createIris({ keywords: ['命中'], ai: {
-    apiKey: 'token', maxConcurrent: 1, maxQueueSize: 2, reviewNormalized: false,
+    apiKey: 'token', maxConcurrent: 1, maxQueueSize: 2,
     fetch: async (_url, init) => {
       const pending = deferred();
       requests.push({ input: JSON.parse(init.body).messages[0].content, ...pending });
@@ -169,27 +169,29 @@ test('failed or timed-out work frees concurrency slots for the next queued job',
   }
 });
 
-test('actual HTTP rate limit counts source and normalized requests', async () => {
+test('separate source-only reviews each consume one rate-limit allowance', async () => {
   const starts = [];
   const iris = createIris({ ai: { apiKey: 'token', rateLimit: { maxRequests: 1, intervalMs: 35 },
     fetch: async () => { starts.push(performance.now()); return reply(); },
   } });
-  await iris.aiModerate('Ａ-b');
+  await Promise.all([iris.aiModerate('Ａ-b'), iris.aiModerate('危-險詞')]);
   assert.equal(starts.length, 2);
   assert.ok(starts[1] - starts[0] >= 33, String(starts));
 });
 
-test('abort while waiting for the next rate allowance settles and never sends the second variant', async () => {
+test('abort while waiting for a rate allowance never submits that review', async () => {
   const mock = mockFetch();
   const controller = new AbortController();
   const iris = createIris({ ai: { apiKey: 'token', fetch: mock.fetch, rateLimit: { maxRequests: 1, intervalMs: 60_000 } } });
+  await iris.aiModerate('first');
   const pending = iris.aiModerate('Ａ-b', { signal: controller.signal });
   await flush();
   assert.equal(mock.calls.length, 1);
   controller.abort();
   const result = await pending;
   assert.equal(result.error.code, 'ABORTED');
-  assert.equal(result.assessments.length, 1);
+  assert.equal(result.assessments.length, 0);
+  assert.equal(mock.calls.length, 1);
   assert.equal(iris.getAIQueueStats().active, 0);
 });
 

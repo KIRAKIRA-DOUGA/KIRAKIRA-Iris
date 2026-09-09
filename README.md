@@ -53,13 +53,12 @@ const ai = await iris.aiModerate(content);       // 只查 AI，不依赖关键�
 | `ai.rateLimit` | 20 次 / 60 秒 | 滑动窗口，按每次实际 HTTP 请求计数 |
 | `ai.maxConcurrent` | 1 | 同时执行的审核数，含等待下一次请求额度的审核 |
 | `ai.maxQueueSize` | 100 | 等待审核上限，不含正在执行的审核；0 表示不排队 |
-| `ai.reviewNormalized` | `true` | 原文与归一化文本不同时分别审核，最多两次请求 |
 | `ai.timeoutMs` | 30000 | 每次请求超时，不含排队或等待限速额度的时间 |
 | `maxInputLength` / `maxMatches` | 100000 / 10000 | 输入长度 / 命中数上限，超过抛出 `RangeError` |
 
 队列按实例共享，`moderate` 与 `aiModerate` 均受约束；不同实例/进程不共享额度。先进先出，满额时**丢弃新提交的审核**，返回 `status: 'dropped'`、`error.code: 'QUEUE_FULL'`、`result: null`，不发请求。使用 `iris.getAIQueueStats()` 查看队列，使用第二个参数 `{ signal }` 取消等待或请求。
 
-每段文本的多个 AI 判断采用“任一不安全即不安全”。不自动重试或切换付费模型。完整高级选项见 TypeScript 类型；AI 会将原文及可选归一化文本发送到 OpenRouter。
+AI **只审核原文**，每次审核最多发送一次请求；归一化仅用于关键词匹配。不自动重试或切换付费模型。完整高级选项见 TypeScript 类型。
 
 ## 构建与发布
 

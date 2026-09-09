@@ -61,7 +61,7 @@ export interface ParsedAIResult {
 }
 
 export interface AIAssessment extends ParsedAIResult {
-  input: 'source' | 'normalized';
+  input: 'source';
   model: string;
   requestId: string | null;
 }
@@ -117,8 +117,6 @@ export interface AIOptions {
   apiKey: string;
   model?: string;
   protocol?: 'auto' | 'nemotron' | 'json';
-  /** Also review normalized input when different and nonempty. Default true. */
-  reviewNormalized?: boolean;
   /** Per HTTP request, starting after rate-limit admission. Default 30,000ms. */
   timeoutMs?: number;
   maxTokens?: number;

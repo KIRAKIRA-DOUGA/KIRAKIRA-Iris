@@ -16,3 +16,5 @@ createIris({ ai: {} });
 createIris({ decisionMode: 'ai-priority' });
 // @ts-expect-error Select a method rather than disabling keyword filtering.
 iris.moderate('x', { keywordFilter: false });
+// @ts-expect-error AI always reviews the source, never normalized text.
+createIris({ ai: { apiKey: 'explicit-token', reviewNormalized: true } });
