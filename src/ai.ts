@@ -1,23 +1,8 @@
-import type { AIAssessment, AIErrorCode, AIErrorInfo, AIOptions, AIResult, NormalizedText, ParsedAIResult } from './types.js';
+import { IrisAIError } from './errors.js';
+import type { AIAssessment, AIOptions, AIResult, NormalizedText, ParsedAIResult } from './types.js';
 
 export const DEFAULT_AI_MODEL = 'nvidia/nemotron-3.5-content-safety:free';
 export const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
-
-export class IrisAIError extends Error implements AIErrorInfo {
-  readonly code: AIErrorCode;
-  readonly status: number | null;
-  readonly retryable: boolean;
-  constructor(code: AIErrorCode, message: string, status: number | null = null, retryable = false) {
-    super(message);
-    this.name = 'IrisAIError';
-    this.code = code;
-    this.status = status;
-    this.retryable = retryable;
-  }
-  toJSON(): AIErrorInfo {
-    return { code: this.code, message: this.message, status: this.status, retryable: this.retryable };
-  }
-}
 
 function invalidResponse(): IrisAIError {
   return new IrisAIError('INVALID_RESPONSE', 'AI 返回了不完整或无法识别的审核结果。');
@@ -172,21 +157,34 @@ async function requestAssessment(
   }
 }
 
-export function emptyAIResult(enabled: boolean, options: AIOptions, reason: AIResult['skipReason']): AIResult {
+export function emptyAIResult(options: AIOptions | undefined, reason: AIResult['skipReason']): AIResult {
   return {
-    enabled, status: enabled ? 'skipped' : 'disabled', result: null,
-    comment: !enabled ? 'AI 过滤已关闭。' : reason === 'empty-input' ? '输入为空，跳过 AI 审核。' : '未达到 AI 复核阈值。',
-    model: options.model ?? DEFAULT_AI_MODEL, categories: [], assessments: [], skipReason: reason, error: null,
+    status: reason === 'not-configured' ? 'disabled' : 'skipped', result: null, needsReview: false,
+    comment: reason === 'not-configured' ? '未配置 AI。' : reason === 'empty-input' ? '输入为空，跳过 AI 审核。' : '未命中关键词，跳过 AI 审核。',
+    model: options?.model ?? DEFAULT_AI_MODEL, categories: [], assessments: [], skipReason: reason, error: null,
   };
 }
 
-export async function reviewWithOpenRouter(text: NormalizedText, options: AIOptions, signal?: AbortSignal): Promise<AIResult> {
-  const result = emptyAIResult(true, options, null);
+export function failedAIResult(options: AIOptions | undefined, error: unknown, assessments: AIAssessment[] = []): AIResult {
+  const known = error instanceof IrisAIError ? error : new IrisAIError('NETWORK_ERROR', 'AI 审核失败。', null, true);
+  return {
+    ...emptyAIResult(options, known.code === 'QUEUE_FULL' ? 'queue-full' : null),
+    status: known.code === 'QUEUE_FULL' ? 'dropped' : 'error', needsReview: true,
+    error: known.toJSON(), comment: known.message, assessments,
+    categories: [...new Set(assessments.flatMap(assessment => assessment.categories))],
+  };
+}
+
+export async function reviewWithOpenRouter(
+  text: NormalizedText, options: AIOptions, signal: AbortSignal | undefined, acquireRequest: () => Promise<void>,
+): Promise<AIResult> {
+  const result = emptyAIResult(options, null);
   try {
-    const apiKey = options.apiKey ?? process.env.OPENROUTER_API_KEY;
-    if (!apiKey?.trim()) throw new IrisAIError('MISSING_API_KEY', '请设置 ai.apiKey 或 OPENROUTER_API_KEY。');
+    const apiKey = options.apiKey;
+    await acquireRequest();
     result.assessments.push(await requestAssessment(text.source, 'source', options, apiKey, signal));
     if ((options.reviewNormalized ?? true) && text.normalizeString && text.normalizeString !== text.source) {
+      await acquireRequest();
       result.assessments.push(await requestAssessment(text.normalizeString, 'normalized', options, apiKey, signal));
     }
     result.status = 'completed';
@@ -195,12 +193,6 @@ export async function reviewWithOpenRouter(text: NormalizedText, options: AIOpti
     result.comment = result.assessments.map(assessment => `${assessment.input === 'source' ? '原文' : '归一化文本'}：${assessment.comment}`).join('\n');
     return result;
   } catch (error) {
-    const known = error instanceof IrisAIError ? error : new IrisAIError('NETWORK_ERROR', 'AI 审核失败。', null, true);
-    result.status = 'error';
-    result.result = null;
-    result.error = known.toJSON();
-    result.comment = known.message;
-    result.categories = [...new Set(result.assessments.flatMap(assessment => assessment.categories))];
-    return result;
+    return failedAIResult(options, error, result.assessments);
   }
 }

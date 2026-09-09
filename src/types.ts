@@ -1,24 +1,19 @@
-/** Ascending risk levels: 一般、危险、极度危险. */
-export type Severity = 'general' | 'dangerous' | 'extreme';
-
 export interface KeywordRule {
   word: string;
-  severity: Severity;
   comment?: string;
   id?: string;
   category?: string;
 }
 
-/** All offsets use JavaScript UTF-16 indices; end is exclusive. */
-export interface SourceSpan {
-  start: number;
-  end: number;
-}
+/** Caller-supplied strings or metadata-bearing rules. No built-in blacklist. */
+export type Keyword = string | KeywordRule;
+
+/** UTF-16 indices, with an exclusive end. */
+export interface SourceSpan { start: number; end: number }
 
 export interface NormalizedText {
   source: string;
   normalizeString: string;
-  /** One source span for each UTF-16 code unit of normalizeString. */
   sourceMap: SourceSpan[];
 }
 
@@ -28,7 +23,6 @@ export interface KeywordMatch {
   hitWord: string;
   /** Compatibility alias for hitWord. */
   hiteWord: string;
-  severity: Severity;
   category: string | null;
   comment: string;
   matchedIn: Array<'source' | 'normalized'>;
@@ -41,16 +35,15 @@ export interface KeywordMatch {
 }
 
 export interface KeywordResult {
-  enabled: boolean;
-  status: 'completed' | 'disabled';
+  status: 'completed';
   hit: boolean;
   /** Compatibility alias for hit. */
   hite: boolean;
-  /** Highest-severity match; source order breaks ties. */
+  /** First match in source order. */
   hitWord: string | null;
   hiteWord: string | null;
+  /** Always equal to hit. */
   isIllegal: boolean;
-  severity: Severity | null;
   comment: string;
   normalizeString: string;
   wordStartInSource: number;
@@ -74,7 +67,7 @@ export interface AIAssessment extends ParsedAIResult {
 }
 
 export type AIErrorCode = 'MISSING_API_KEY' | 'HTTP_ERROR' | 'API_ERROR'
-  | 'INVALID_RESPONSE' | 'TIMEOUT' | 'ABORTED' | 'NETWORK_ERROR';
+  | 'INVALID_RESPONSE' | 'TIMEOUT' | 'ABORTED' | 'NETWORK_ERROR' | 'QUEUE_FULL';
 
 export interface AIErrorInfo {
   code: AIErrorCode;
@@ -84,66 +77,73 @@ export interface AIErrorInfo {
 }
 
 export interface AIResult {
-  enabled: boolean;
-  status: 'completed' | 'skipped' | 'disabled' | 'error';
+  status: 'completed' | 'skipped' | 'disabled' | 'error' | 'dropped';
   /** null means no complete AI verdict, never a safe verdict. */
   result: boolean | null;
+  needsReview: boolean;
   comment: string;
   model: string;
   categories: string[];
   assessments: AIAssessment[];
-  skipReason: 'disabled' | 'below-threshold' | 'empty-input' | null;
+  skipReason: 'not-configured' | 'no-keyword-hit' | 'empty-input' | 'queue-full' | null;
   error: AIErrorInfo | null;
 }
 
 export interface ModerationResult {
-  /** Application policy decision; not a legal determination. */
+  /** A keyword hit cannot be cleared by any AI outcome. */
   isIllegal: boolean;
   needsReview: boolean;
-  decisionSource: 'ai' | 'keyword' | 'combined' | 'error-policy' | 'none';
   keywordResult: KeywordResult;
   aiResult: AIResult;
 }
 
+export interface AIRateLimit {
+  /** Maximum outbound HTTP requests in any sliding interval. */
+  maxRequests: number;
+  intervalMs: number;
+}
+
+export interface AIQueueStats {
+  /** Running reviews, including reviews waiting for their next request allowance. */
+  active: number;
+  /** FIFO jobs waiting for a concurrency slot. */
+  queued: number;
+  maxConcurrent: number;
+  maxQueueSize: number;
+}
+
 export interface AIOptions {
-  /** Falls back to OPENROUTER_API_KEY; only read when a review is needed. */
-  apiKey?: string;
+  /** Required explicit token string. Never read from the environment. */
+  apiKey: string;
   model?: string;
-  /** auto selects Nemotron's native labels for NVIDIA content-safety models. */
   protocol?: 'auto' | 'nemotron' | 'json';
-  /** Default: keyword. If keywords are disabled or empty, reviews all input. */
-  trigger?: 'keyword' | 'always';
-  minSeverity?: Severity;
-  /** Review normalized input in addition to the source, if different. Default true. */
+  /** Also review normalized input when different and nonempty. Default true. */
   reviewNormalized?: boolean;
-  /** Per request timeout, including reading the response body. Default 30,000ms. */
+  /** Per HTTP request, starting after rate-limit admission. Default 30,000ms. */
   timeoutMs?: number;
   maxTokens?: number;
-  /** Default block. keyword-only still sets needsReview on errors. */
-  onError?: 'block' | 'keyword-only' | 'throw';
-  /** Added to the system instructions for JSON protocol only. */
+  /** Default 20 requests per 60,000ms; shared by both AI-capable methods. */
+  rateLimit?: AIRateLimit;
+  /** Running review jobs per Iris instance. Default 1. */
+  maxConcurrent?: number;
+  /** Waiting jobs excluding running jobs. Default 100; 0 disables waiting. */
+  maxQueueSize?: number;
+  /** JSON protocol only. */
   policy?: string;
-  /** Optional structured JSON enforcement; must be supported by the selected model. */
+  /** Opt-in JSON Schema for compatible JSON models. */
   structuredOutput?: boolean;
-  /** Injectable transport for tests. The destination is always OpenRouter. */
   fetch?: typeof globalThis.fetch;
 }
 
 export interface IrisOptions {
-  /** No built-in production blacklist. Supply your application's rules. */
-  keywords?: readonly KeywordRule[];
-  keywordFilter?: boolean;
-  aiFilter?: boolean;
-  blockSeverity?: Severity;
-  /** AI can clear a keyword hit by default; any rejects if either dimension rejects. */
-  decisionMode?: 'ai-priority' | 'any';
+  keywords?: readonly Keyword[];
   maxInputLength?: number;
   maxMatches?: number;
+  /** Omit for keyword-only use. Configuring AI requires an explicit token. */
   ai?: AIOptions;
 }
 
 export interface ModerateOptions {
-  keywordFilter?: boolean;
-  aiFilter?: boolean;
+  /** Cancels queued, rate-limited and in-flight AI work. */
   signal?: AbortSignal;
 }

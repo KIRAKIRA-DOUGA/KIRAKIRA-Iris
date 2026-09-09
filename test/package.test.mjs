@@ -6,16 +6,17 @@ import { readFileSync } from 'node:fs';
 import { createIris } from 'kirakira-iris';
 
 test('ESM package export is usable', async () => {
-  const result = await createIris({ aiFilter: false }).moderate('test');
+  const result = await createIris().moderate('test');
   assert.equal(result.isIllegal, false);
 });
 
 test('CommonJS package export is usable', async () => {
   const require = createRequire(import.meta.url);
   const pkg = require('kirakira-iris');
-  const result = await pkg.createIris({ aiFilter: false }).moderate('test');
+  const result = await pkg.createIris().moderate('test');
   assert.equal(result.isIllegal, false);
   assert.equal(typeof pkg.normalizeText, 'function');
+  assert.equal(pkg.createIris({ keywords: ['危险词'] }).keywordModerate('危險詞').isIllegal, true);
 });
 
 test('release validation accepts only the exact stable version tag', () => {

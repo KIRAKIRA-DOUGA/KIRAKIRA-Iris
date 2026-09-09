@@ -1,8 +1,18 @@
-import { createIris, type ModerationResult, type KeywordRule } from 'kirakira-iris';
+import { createIris, type ModerationResult, type Keyword, type KeywordResult, type AIResult } from 'kirakira-iris';
 
-const keywords = [{ word: 'example', severity: 'dangerous' }] satisfies KeywordRule[];
-const result: ModerationResult = await createIris({ keywords, aiFilter: false }).moderate('example');
-const verdict: boolean | null = result.aiResult.result;
-void verdict;
-// @ts-expect-error Unknown severities are rejected by TypeScript.
-createIris({ keywords: [{ word: 'x', severity: 'unknown' }] });
+const keywords: Keyword[] = ['example', { word: '示例', comment: '提示' }];
+const iris = createIris({ keywords, ai: { apiKey: 'explicit-token', rateLimit: { maxRequests: 20, intervalMs: 60_000 }, maxQueueSize: 100 } });
+const both: ModerationResult = await iris.moderate('example');
+const keyword: KeywordResult = iris.keywordModerate('example');
+const ai: AIResult = await iris.aiModerate('example');
+void [both, keyword, ai];
+// @ts-expect-error Severity no longer exists.
+createIris({ keywords: [{ word: 'x', severity: 'general' }] });
+// @ts-expect-error Keyword filtering cannot be disabled.
+createIris({ keywordFilter: false });
+// @ts-expect-error An explicit token is required when AI is configured.
+createIris({ ai: {} });
+// @ts-expect-error AI cannot clear a keyword hit.
+createIris({ decisionMode: 'ai-priority' });
+// @ts-expect-error Select a method rather than disabling keyword filtering.
+iris.moderate('x', { keywordFilter: false });

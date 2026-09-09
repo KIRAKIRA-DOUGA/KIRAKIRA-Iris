@@ -1,7 +1,7 @@
 {
   "name": "kirakira-iris",
-  "version": "0.1.0",
-  "description": "Unicode-aware keyword and OpenRouter AI content moderation for Node.js and TypeScript.",
+  "version": "0.2.0",
+  "description": "Chinese-aware Aho-Corasick keyword moderation and queued, rate-limited OpenRouter AI review.",
   "type": "module",
   "main": "./dist/cjs/index.js",
   "module": "./dist/esm/index.js",
@@ -32,6 +32,7 @@
     "typecheck": "npm run build && tsc -p test/tsconfig.json",
     "test": "npm run build && node scripts/test.mjs",
     "check": "npm run typecheck && node scripts/test.mjs",
+    "bench": "npm run build && node scripts/benchmark.mjs",
     "prepack": "npm run build",
     "prepublishOnly": "npm run check",
     "release:check": "node scripts/check-release.mjs",
@@ -62,5 +63,8 @@
   "devDependencies": {
     "@types/node": "22.20.1",
     "typescript": "5.9.3"
+  },
+  "dependencies": {
+    "opencc-js": "1.4.2"
   }
 }

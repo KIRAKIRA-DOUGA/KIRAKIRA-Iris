@@ -1,11 +1,13 @@
-import { emptyAIResult, IrisAIError, resolveProtocol, reviewWithOpenRouter } from './ai.js';
-import { KeywordMatcher, SEVERITY_RANK, validateSeverity } from './keywords.js';
+import { emptyAIResult, failedAIResult, resolveProtocol, reviewWithOpenRouter } from './ai.js';
+import { IrisAIError } from './errors.js';
+import { KeywordMatcher } from './keywords.js';
 import { normalizeText } from './normalize.js';
-import type { AIOptions, IrisOptions, KeywordResult, ModerateOptions, ModerationResult } from './types.js';
+import { AIScheduler } from './scheduler.js';
+import type { AIOptions, AIQueueStats, IrisOptions, KeywordResult, ModerateOptions, ModerationResult, NormalizedText } from './types.js';
 
-function positiveInteger(value: number | undefined, name: string): void {
-  if (value !== undefined && (!Number.isSafeInteger(value) || value <= 0 || value > 2_147_483_647)) {
-    throw new RangeError(`${name} must be a positive integer <= 2147483647.`);
+function integer(value: number | undefined, name: string, minimum = 1): void {
+  if (value !== undefined && (!Number.isSafeInteger(value) || value < minimum || value > 2_147_483_647)) {
+    throw new RangeError(`${name} must be an integer between ${minimum} and 2147483647.`);
   }
 }
 
@@ -13,89 +15,103 @@ function booleanOption(value: boolean | undefined, name: string): void {
   if (value !== undefined && typeof value !== 'boolean') throw new TypeError(`${name} must be a boolean.`);
 }
 
-function choice(value: string | undefined, values: readonly string[], name: string): void {
-  if (value !== undefined && !values.includes(value)) throw new TypeError(`Invalid ${name}.`);
-}
-
 export class Iris {
-  private readonly options: IrisOptions;
-  private readonly ai: AIOptions;
+  private readonly ai: AIOptions | undefined;
   private readonly matcher: KeywordMatcher;
+  private readonly scheduler: AIScheduler;
+  private readonly maxInputLength: number;
+  private readonly maxMatches: number;
 
   constructor(options: IrisOptions = {}) {
-    this.options = { ...options };
-    this.ai = { ...options.ai };
+    for (const key of ['keywordFilter', 'aiFilter', 'blockSeverity', 'decisionMode']) {
+      if (key in options) throw new TypeError(`${key} was removed; use keywordModerate, aiModerate or moderate.`);
+    }
+    for (const key of ['maxInputLength', 'maxMatches'] as const) integer(options[key], key);
+    this.maxInputLength = options.maxInputLength ?? 100_000;
+    this.maxMatches = options.maxMatches ?? 10_000;
+    if (options.ai) {
+      const ai = options.ai;
+      if (typeof ai.apiKey !== 'string' || !ai.apiKey.trim()) throw new TypeError('ai.apiKey must be a nonempty token string.');
+      for (const key of ['trigger', 'minSeverity', 'onError']) {
+        if (key in ai) throw new TypeError(`ai.${key} was removed.`);
+      }
+      for (const key of ['reviewNormalized', 'structuredOutput'] as const) booleanOption(ai[key], `ai.${key}`);
+      for (const key of ['timeoutMs', 'maxTokens', 'maxConcurrent'] as const) integer(ai[key], `ai.${key}`);
+      integer(ai.maxQueueSize, 'ai.maxQueueSize', 0);
+      if (ai.rateLimit !== undefined) {
+        if (!ai.rateLimit || typeof ai.rateLimit.maxRequests !== 'number' || typeof ai.rateLimit.intervalMs !== 'number') {
+          throw new TypeError('ai.rateLimit requires maxRequests and intervalMs.');
+        }
+        integer(ai.rateLimit.maxRequests, 'ai.rateLimit.maxRequests');
+        integer(ai.rateLimit.intervalMs, 'ai.rateLimit.intervalMs');
+      }
+      if (ai.protocol !== undefined && !['auto', 'nemotron', 'json'].includes(ai.protocol)) throw new TypeError('Invalid ai.protocol.');
+      for (const key of ['model', 'policy'] as const) {
+        if (ai[key] !== undefined && typeof ai[key] !== 'string') throw new TypeError(`ai.${key} must be a string.`);
+      }
+      if (ai.model !== undefined && !ai.model.trim()) throw new TypeError('ai.model must not be empty.');
+      if (ai.fetch !== undefined && typeof ai.fetch !== 'function') throw new TypeError('ai.fetch must be a function.');
+      if (resolveProtocol(ai) === 'nemotron' && (ai.policy || ai.structuredOutput)) {
+        throw new TypeError('Custom policy and structuredOutput require ai.protocol="json" and a compatible model.');
+      }
+      this.ai = { ...ai, ...(ai.rateLimit ? { rateLimit: { ...ai.rateLimit } } : {}) };
+    }
     this.matcher = new KeywordMatcher(options.keywords ?? []);
-    for (const key of ['keywordFilter', 'aiFilter'] as const) booleanOption(options[key], key);
-    for (const key of ['reviewNormalized', 'structuredOutput'] as const) booleanOption(this.ai[key], `ai.${key}`);
-    for (const key of ['maxInputLength', 'maxMatches'] as const) positiveInteger(options[key], key);
-    for (const key of ['timeoutMs', 'maxTokens'] as const) positiveInteger(this.ai[key], `ai.${key}`);
-    validateSeverity(options.blockSeverity ?? 'dangerous');
-    validateSeverity(this.ai.minSeverity ?? 'dangerous');
-    choice(options.decisionMode, ['ai-priority', 'any'], 'decisionMode');
-    choice(this.ai.trigger, ['keyword', 'always'], 'ai.trigger');
-    choice(this.ai.protocol, ['auto', 'nemotron', 'json'], 'ai.protocol');
-    choice(this.ai.onError, ['block', 'keyword-only', 'throw'], 'ai.onError');
-    for (const key of ['apiKey', 'model', 'policy'] as const) {
-      if (this.ai[key] !== undefined && typeof this.ai[key] !== 'string') throw new TypeError(`ai.${key} must be a string.`);
-    }
-    if (this.ai.model !== undefined && !this.ai.model.trim()) throw new TypeError('ai.model must not be empty.');
-    if (this.ai.fetch !== undefined && typeof this.ai.fetch !== 'function') throw new TypeError('ai.fetch must be a function.');
-    if (resolveProtocol(this.ai) === 'nemotron' && (this.ai.policy || this.ai.structuredOutput)) {
-      throw new TypeError('Custom policy and structuredOutput require ai.protocol="json" and a compatible model.');
-    }
+    this.scheduler = new AIScheduler({
+      maxConcurrent: this.ai?.maxConcurrent ?? 1,
+      maxQueueSize: this.ai?.maxQueueSize ?? 100,
+      rateLimit: this.ai?.rateLimit ?? { maxRequests: 20, intervalMs: 60_000 },
+    });
   }
 
-  private normalize(input: string) {
+  private normalize(input: string): NormalizedText {
     if (typeof input !== 'string') throw new TypeError('Input must be a string.');
-    const limit = this.options.maxInputLength ?? 100_000;
-    if (input.length > limit) throw new RangeError(`Input exceeds maxInputLength (${limit} UTF-16 units).`);
+    if (input.length > this.maxInputLength) throw new RangeError(`Input exceeds maxInputLength (${this.maxInputLength} UTF-16 units).`);
     return normalizeText(input);
   }
 
-  /** Synchronous keyword-only inspection. Never contacts OpenRouter. */
-  checkKeywords(input: string): KeywordResult {
-    return this.matcher.check(this.normalize(input), this.options.keywordFilter ?? true,
-      this.options.blockSeverity ?? 'dangerous', this.options.maxMatches ?? 10_000);
+  private async review(text: NormalizedText, signal?: AbortSignal) {
+    const ai = this.ai;
+    if (!ai) return failedAIResult(undefined, new IrisAIError('MISSING_API_KEY', '请通过 ai.apiKey 传入 token 字符串。'));
+    try {
+      return await this.scheduler.run(
+        () => reviewWithOpenRouter(text, ai, signal, () => this.scheduler.acquireRequest(signal)), signal,
+      );
+    } catch (error) {
+      return failedAIResult(ai, error);
+    }
   }
 
-  async moderate(input: string, overrides: ModerateOptions = {}): Promise<ModerationResult> {
-    booleanOption(overrides.keywordFilter, 'keywordFilter');
-    booleanOption(overrides.aiFilter, 'aiFilter');
-    const keywordEnabled = overrides.keywordFilter ?? this.options.keywordFilter ?? true;
-    const aiEnabled = overrides.aiFilter ?? this.options.aiFilter ?? true;
-    const text = this.normalize(input);
-    const keywordResult = this.matcher.check(text, keywordEnabled,
-      this.options.blockSeverity ?? 'dangerous', this.options.maxMatches ?? 10_000);
-    const reachedThreshold = !!keywordResult.severity
-      && SEVERITY_RANK[keywordResult.severity] >= SEVERITY_RANK[this.ai.minSeverity ?? 'dangerous'];
-    const shouldReview = aiEnabled && !!input.trim() && (
-      this.ai.trigger === 'always' || !keywordEnabled || this.matcher.size === 0 || reachedThreshold
-    );
-    const aiResult = shouldReview
-      ? await reviewWithOpenRouter(text, this.ai, overrides.signal)
-      : emptyAIResult(aiEnabled, this.ai, !aiEnabled ? 'disabled' : !input.trim() ? 'empty-input' : 'below-threshold');
+  /** Synchronous and local. Every keyword hit is illegal. */
+  keywordModerate(input: string): KeywordResult {
+    return this.matcher.check(this.normalize(input), this.maxMatches);
+  }
 
-    if (aiResult.error) {
-      if (this.ai.onError === 'throw') {
-        const { code, message, status, retryable } = aiResult.error;
-        throw new IrisAIError(code, message, status, retryable);
-      }
-      // Keep any already-confirmed unsafe result even if a later variant fails.
-      const confirmedUnsafe = aiResult.assessments.some(assessment => assessment.result);
-      return {
-        isIllegal: this.ai.onError !== 'keyword-only' || keywordResult.isIllegal || confirmedUnsafe,
-        needsReview: true, decisionSource: 'error-policy', keywordResult, aiResult,
-      };
+  /** AI only. Does not consult the keyword matcher. */
+  async aiModerate(input: string, options: ModerateOptions = {}) {
+    const text = this.normalize(input);
+    if (!input.trim()) return emptyAIResult(this.ai, 'empty-input');
+    return this.review(text, options.signal);
+  }
+
+  /** Keywords always run. Every hit triggers optional AI, which cannot clear the hit. */
+  async moderate(input: string, options: ModerateOptions = {}): Promise<ModerationResult> {
+    for (const key of ['keywordFilter', 'aiFilter']) {
+      if (key in options) throw new TypeError(`${key} was removed; choose the appropriate moderation method.`);
     }
-    const completed = aiResult.status === 'completed';
-    const anyMode = this.options.decisionMode === 'any';
+    const text = this.normalize(input);
+    const keywordResult = this.matcher.check(text, this.maxMatches);
+    const aiResult = !this.ai ? emptyAIResult(undefined, 'not-configured')
+      : !keywordResult.hit ? emptyAIResult(this.ai, 'no-keyword-hit')
+      : await this.review(text, options.signal);
     return {
-      isIllegal: completed ? (anyMode ? keywordResult.isIllegal || aiResult.result === true : aiResult.result === true) : keywordResult.isIllegal,
-      needsReview: false,
-      decisionSource: completed ? (anyMode && keywordEnabled ? 'combined' : 'ai') : keywordEnabled ? 'keyword' : 'none',
-      keywordResult, aiResult,
+      isIllegal: keywordResult.hit || aiResult.result === true,
+      needsReview: aiResult.needsReview, keywordResult, aiResult,
     };
+  }
+
+  getAIQueueStats(): AIQueueStats {
+    return this.scheduler.stats;
   }
 }
 

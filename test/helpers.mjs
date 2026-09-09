@@ -16,8 +16,12 @@ export function mockFetch(...responses) {
   return { fetch, calls };
 }
 
-export const rules = [
-  { word: '提醒', severity: 'general', comment: '一般提示' },
-  { word: '危险词', severity: 'dangerous', comment: '需要结合上下文复核' },
-  { word: '极危词', severity: 'extreme', category: 'test', id: 'extreme-1' },
-];
+export async function flush() {
+  for (let i = 0; i < 30; i++) await Promise.resolve();
+}
+
+export function deferred() {
+  let resolve, reject;
+  const promise = new Promise((yes, no) => { resolve = yes; reject = no; });
+  return { promise, resolve, reject };
+}

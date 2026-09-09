@@ -1,5 +1,5 @@
 import iris = require('kirakira-iris');
-const moderator: iris.Iris = iris.createIris({ aiFilter: false });
-const result: iris.KeywordResult = moderator.checkKeywords('example');
+const moderator: iris.Iris = iris.createIris({ keywords: ['示例'] });
+const result: iris.KeywordResult = moderator.keywordModerate('示例');
 const hit: boolean = result.hite;
 void hit;
