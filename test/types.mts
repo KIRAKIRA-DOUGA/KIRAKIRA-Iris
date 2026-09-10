@@ -1,4 +1,4 @@
-import { createIris, type ModerationResult, type KeywordResult, type AIResult } from 'kirakira-iris';
+import { createIris, type ModerationResult, type KeywordResult, type KeywordMatch, type AIResult } from 'kirakira-iris';
 
 const keywords: string[] = ['example', '示例'];
 const iris = createIris({ keywords, ai: { apiKey: 'explicit-token', rateLimit: { maxRequests: 20, intervalMs: 60_000 }, maxQueueSize: 100 } });
@@ -28,7 +28,10 @@ ai.result;
 ai.assessments;
 const status: 'pass' | 'block' | 'drop' = ai.status;
 const hitWord: string | undefined = keyword.matchesInNormalize[0]?.hitWord;
-void [status, hitWord];
+const match: KeywordMatch = { hitWord: 'example', start: 0, end: 7 };
+const start: number | undefined = keyword.matchesInSource[0]?.start;
+const end: number | undefined = keyword.matchesInNormalize[0]?.end;
+void [status, hitWord, match, start, end];
 // @ts-expect-error Keyword filtering cannot be disabled.
 createIris({ keywordFilter: false });
 // @ts-expect-error An explicit token is required when AI is configured.

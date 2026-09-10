@@ -2,19 +2,20 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createIris, normalizeText, mapNormalizedRange, mapSourceRange } from '../dist/esm/index.js';
 
-test('raw and normalized arrays retain independent matches and mapped source offsets', () => {
+test('raw and normalized arrays retain independent matches with offsets in their own text', () => {
   const source = '前危险词危\n-险\u200b词后危险词';
   const result = createIris({ keywords: ['危险词'] }).keywordModerate(source);
   assert.equal(result.hit, true);
   assert.equal(result.matchesInSource.length, 2);
   assert.equal(result.matchesInNormalize.length, 3);
+  assert.deepEqual(result.matchesInSource.map(({ start, end }) => [start, end]), [[1, 4], [11, 14]]);
+  assert.deepEqual(result.matchesInNormalize.map(({ start, end }) => [start, end]), [[1, 4], [4, 7], [8, 11]]);
   for (const match of result.matchesInSource) {
-    assert.equal(source.slice(match.wordStartInSource, match.wordEndInSource), '危险词');
+    assert.equal(source.slice(match.start, match.end), '危险词');
   }
   for (const match of result.matchesInNormalize) {
     assert.equal(match.hitWord, '危险词');
-    assert.equal(normalizeText(source.slice(match.wordStartInSource, match.wordEndInSource)).normalizeString, '危险词');
-    assert.equal(result.normalizeString.slice(match.wordStartInNormalize, match.wordEndInNormalize), '危险词');
+    assert.equal(result.normalizeString.slice(match.start, match.end), '危险词');
   }
 });
 
@@ -25,8 +26,8 @@ test('normalizes fullwidth, punctuation, emoji and invisible spacing on both sid
   assert.equal(result.normalizeString, 'bad');
   assert.equal(result.matchesInSource.length, 0);
   assert.equal(result.matchesInNormalize[0].hitWord, 'ＢＡＤ');
-  assert.equal(result.matchesInNormalize[0].wordStartInSource, 2);
-  assert.equal(result.matchesInNormalize[0].wordEndInSource, 7);
+  assert.equal(result.matchesInNormalize[0].start, 0);
+  assert.equal(result.matchesInNormalize[0].end, 3);
   assert.equal(normalizeText('Ａ-Ｂ\nＣ\u200B\uFEFF\t💜危險\r\n詞').normalizeString, 'abc危险词');
 });
 
@@ -38,7 +39,8 @@ test('simplified, traditional and mixed Chinese match in both directions', () =>
       assert.equal(result.hit, true, keyword + ': ' + source);
       assert.equal(result.normalizeString, '危险词');
       const match = result.matchesInNormalize[0];
-      assert.equal(source.slice(match.wordStartInSource, match.wordEndInSource), source);
+      assert.equal(match.hitWord, keyword);
+      assert.equal(result.normalizeString.slice(match.start, match.end), '危险词');
     }
   }
 });
@@ -50,14 +52,20 @@ test('Chinese many-to-one variants share canonical characters without translatin
   assert.equal(createIris({ keywords: ['软件'] }).keywordModerate('軟體').hit, false);
 });
 
-test('traditional Chinese offsets remain UTF-16 source positions after emoji and obfuscation', () => {
-  const source = '💜前危\u200b險-詞後';
-  const result = createIris({ keywords: ['危险词'] }).keywordModerate(source);
-  const match = result.matchesInNormalize[0];
-  assert.equal(match.wordStartInSource, 3);
-  assert.equal(match.wordEndInSource, 8);
-  assert.equal(source.slice(match.wordStartInSource, match.wordEndInSource), '危\u200b險-詞');
-  assert.equal(result.normalizeString.slice(match.wordStartInNormalize, match.wordEndInNormalize), '危险词');
+test('source and normalized matches use their own UTF-16 offsets after emoji and obfuscation', () => {
+  const source = '💜𠮷前危\u200b險-詞後';
+  const result = createIris({ keywords: ['危险词', '危\u200b險-詞'] }).keywordModerate(source);
+  const original = result.matchesInSource[0];
+  assert.equal(original.start, 5);
+  assert.equal(original.end, 10);
+  assert.equal(source.slice(original.start, original.end), '危\u200b險-詞');
+  assert.equal(result.normalizeString, '𠮷前危险词后');
+  assert.equal(result.matchesInNormalize.length, 2);
+  for (const match of result.matchesInNormalize) {
+    assert.equal(match.start, 3);
+    assert.equal(match.end, 6);
+    assert.equal(result.normalizeString.slice(match.start, match.end), '危险词');
+  }
 });
 
 test('grapheme composition preserves split accents, Hangul and supplementary characters', () => {
@@ -93,14 +101,14 @@ test('ASCII fast path matches Unicode normalization for all ASCII code points', 
   assert.deepEqual(general.sourceMap.slice(0, -1), fast.sourceMap);
 });
 
-test('shared scan preserves distinct raw/normalized ranges for combining graphemes', () => {
+test('shared scan keeps literal offsets without expanding combining grapheme spans', () => {
   const source = 'a\u0321';
   const result = createIris({ keywords: ['a'] }).keywordModerate(source);
   assert.equal(result.normalizeString, source);
   assert.equal(result.matchesInSource.length, 1);
   assert.equal(result.matchesInNormalize.length, 1);
-  assert.equal(result.matchesInSource[0].wordEndInSource, 1);
-  assert.equal(result.matchesInNormalize[0].wordEndInSource, 2);
+  assert.deepEqual(result.matchesInSource[0], { hitWord: 'a', start: 0, end: 1 });
+  assert.deepEqual(result.matchesInNormalize[0], { hitWord: 'a', start: 0, end: 1 });
 });
 
 test('public keyword results contain only hit, text and two sorted match arrays', () => {
@@ -108,10 +116,12 @@ test('public keyword results contain only hit, text and two sorted match arrays'
   assert.deepEqual(Object.keys(result).sort(), ['hit', 'matchesInNormalize', 'matchesInSource', 'normalizeString']);
   for (const matches of [result.matchesInSource, result.matchesInNormalize]) {
     assert.deepEqual(matches.map(match => match.hitWord), ['第一', '第二']);
-    assert.deepEqual(Object.keys(matches[0]).sort(), ['hitWord', 'wordEndInNormalize', 'wordEndInSource', 'wordStartInNormalize', 'wordStartInSource']);
+    assert.deepEqual(Object.keys(matches[0]).sort(), ['end', 'hitWord', 'start']);
   }
   result.matchesInSource[0].hitWord = 'changed';
+  result.matchesInSource[0].start = 1;
   assert.equal(result.matchesInNormalize[0].hitWord, '第一');
+  assert.equal(result.matchesInNormalize[0].start, 0);
 });
 
 test('no embedded keywords; empty dictionary stays empty', () => {
@@ -121,12 +131,10 @@ test('no embedded keywords; empty dictionary stays empty', () => {
   assert.deepEqual(result.matchesInNormalize, []);
 });
 
-test('symbols-only rules match the original text with no normalized interval', () => {
+test('keywords normalized to empty strings only match the original text', () => {
   const result = createIris({ keywords: ['!!!'] }).keywordModerate('!!!');
   assert.equal(result.hit, true);
-  assert.equal(result.matchesInSource[0].hitWord, '!!!');
-  assert.equal(result.matchesInSource[0].wordStartInNormalize, -1);
-  assert.equal(result.matchesInSource[0].wordEndInNormalize, -1);
+  assert.deepEqual(result.matchesInSource[0], { hitWord: '!!!', start: 0, end: 3 });
   assert.deepEqual(result.matchesInNormalize, []);
 });
 
@@ -140,9 +148,9 @@ test('Aho-Corasick emits overlaps, suffixes and duplicate rules', () => {
 test('compatibility expansions retain separate normalized matches', () => {
   const result = createIris({ keywords: ['f'] }).keywordModerate('ﬃ');
   assert.equal(result.matchesInSource.length, 0);
-  assert.deepEqual(result.matchesInNormalize.map(match => match.wordStartInNormalize), [0, 1]);
+  assert.deepEqual(result.matchesInNormalize.map(({ start, end }) => [start, end]), [[0, 1], [1, 2]]);
   for (const match of result.matchesInNormalize) {
-    assert.equal('ﬃ'.slice(match.wordStartInSource, match.wordEndInSource), 'ﬃ');
+    assert.equal(result.normalizeString.slice(match.start, match.end), 'f');
   }
 });
 
@@ -189,7 +197,7 @@ test('seeded fuzz matches an exhaustive literal reference for every occurrence',
       }
     });
     for (const matches of [result.matchesInSource, result.matchesInNormalize]) {
-      const actual = matches.map(match => `${match.hitWord}:${match.wordStartInSource}:${match.wordEndInSource}`).sort();
+      const actual = matches.map(match => `${match.hitWord}:${match.start}:${match.end}`).sort();
       assert.deepEqual(actual, expected.sort());
     }
   }

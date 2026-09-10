@@ -7,19 +7,22 @@ export interface NormalizedText {
   sourceMap: SourceSpan[];
 }
 
+/** UTF-16 offsets into the text represented by the containing match array. */
 export interface KeywordMatch {
   /** The original keyword supplied by the caller, before normalization. */
   hitWord: string;
-  wordStartInSource: number;
-  wordEndInSource: number;
-  wordStartInNormalize: number;
-  wordEndInNormalize: number;
+  /** Inclusive start. */
+  start: number;
+  /** Exclusive end. */
+  end: number;
 }
 
 export interface KeywordResult {
   hit: boolean;
   normalizeString: string;
+  /** Match offsets refer to the original input. */
   matchesInSource: KeywordMatch[];
+  /** Match offsets refer to normalizeString. */
   matchesInNormalize: KeywordMatch[];
 }
 

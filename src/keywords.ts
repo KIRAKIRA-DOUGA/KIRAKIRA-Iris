@@ -1,5 +1,5 @@
 import { Automaton } from './automaton.js';
-import { mapNormalizedRange, mapSourceRange, normalizeText } from './normalize.js';
+import { normalizeText } from './normalize.js';
 import type { KeywordMatch, KeywordResult, NormalizedText } from './types.js';
 
 export class KeywordMatcher {
@@ -26,16 +26,12 @@ export class KeywordMatcher {
       if (matchesInSource.length + matchesInNormalize.length >= maxMatches) {
         throw new RangeError(`Keyword matches exceed maxMatches (${maxMatches}).`);
       }
-      const source = inSource ? { start, end } : mapNormalizedRange(text, start, end);
-      const normalized = inSource ? mapSourceRange(text, start, end) : { start, end };
       (inSource ? matchesInSource : matchesInNormalize).push({
-        hitWord: this.words[wordIndex]!,
-        wordStartInSource: source.start, wordEndInSource: source.end,
-        wordStartInNormalize: normalized.start, wordEndInNormalize: normalized.end,
+        hitWord: this.words[wordIndex]!, start, end,
       });
     };
     if (this.sourceMatcher === this.normalizedMatcher && text.source === text.normalizeString) {
-      // Share the scan, but project each dimension separately for grapheme spans.
+      // Share the scan while keeping independent match objects in both arrays.
       this.sourceMatcher.scan(text.source, (word, start, end) => {
         add(word, start, end, true);
         add(word, start, end, false);
@@ -44,8 +40,8 @@ export class KeywordMatcher {
       this.sourceMatcher.scan(text.source, (word, start, end) => add(word, start, end, true));
       this.normalizedMatcher.scan(text.normalizeString, (word, start, end) => add(word, start, end, false));
     }
-    matchesInSource.sort((a, b) => a.wordStartInSource - b.wordStartInSource || a.wordEndInSource - b.wordEndInSource);
-    matchesInNormalize.sort((a, b) => a.wordStartInNormalize - b.wordStartInNormalize || a.wordEndInNormalize - b.wordEndInNormalize);
+    matchesInSource.sort((a, b) => a.start - b.start || a.end - b.end);
+    matchesInNormalize.sort((a, b) => a.start - b.start || a.end - b.end);
     return {
       hit: matchesInSource.length > 0 || matchesInNormalize.length > 0,
       normalizeString: text.normalizeString, matchesInSource, matchesInNormalize,

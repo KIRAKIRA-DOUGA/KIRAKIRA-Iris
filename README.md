@@ -105,17 +105,15 @@ interface KeywordResult {
 }
 
 interface KeywordMatch {
-  hitWord: string;              // 词库中未经归一化的关键词
-  wordStartInSource: number;    // 原文起点
-  wordEndInSource: number;      // 原文终点，不含该位置
-  wordStartInNormalize: number; // 归一化文本起点
-  wordEndInNormalize: number;   // 归一化文本终点，不含该位置
+  hitWord: string; // 词库中未经归一化的关键词
+  start: number;   // 所属文本中的起点
+  end: number;     // 所属文本中的终点，不含该位置
 }
 ```
 
-两组列表独立保留重叠和重复词条命中，分别按各自文本的起点、终点排序；同一位置可出现在两组中，未命中的列表为 `[]`。下标均为 **UTF-16、左闭右开**，可直接用于 `slice(start, end)`。归一化命中也提供对应的原文范围，便于高亮；原文中的纯符号词没有归一化位置时，两个归一化下标为 `-1`。
+两组列表独立保留重叠和重复词条命中，分别按各自文本的起点、终点排序；同一位置可出现在两组中，未命中的列表为 `[]`。每条匹配只提供一组 **UTF-16、左闭右开** 的下标：`matchesInSource` 用于 `content.slice(start, end)`，`matchesInNormalize` 用于 `normalizeString.slice(start, end)`，两者的位置不能混用。归一化后为空的关键词只参与原文匹配。
 
-词库初始化和刷新时编译为 **Aho–Corasick** 自动机，扫描为 `O(n + z)`，位置映射和排序另有开销。重复使用同一实例。`npm run bench` 可与逐词 `indexOf` 比较；小词库不保证 AC 更快。
+词库初始化和刷新时编译为 **Aho–Corasick** 自动机，扫描为 `O(n + z)`，归一化和排序另有开销。重复使用同一实例。`npm run bench` 可与逐词 `indexOf` 比较；小词库不保证 AC 更快。
 
 ## AI 审查与队列
 
