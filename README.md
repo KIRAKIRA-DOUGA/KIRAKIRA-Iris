@@ -38,11 +38,14 @@ const iris = createIris({
 
 const content = 'user-content';                  // 待审核内容
 const both = await iris.moderate(content);       // 同时使用关键词与 AI 审查
-const keyword = iris.keywordModerate(content);  // 只使用关键词审查
+const keyword = iris.keywordModerate(content);   // 只使用关键词审查
 const ai = await iris.aiModerate(content);       // 只使用 AI 审查
 ```
 
-`moderate` 始终检查关键词，配置 AI 后也会审查未命中关键词的原文；省略 `ai` 时只查关键词。关键词只要命中，最终 `isIllegal` 必定为 `true`，AI 无权推翻。
+`moderate` 函数始终使用关键词检查内容，如果在 `createIris` 时配置了 AI，也会使用 AI 审查命中关键词的内容（AI 仅审查原文，不审查归一化后的内容）。关键词只要命中，最终 `isIllegal` 必定为 `true`，AI 不会推翻关键词判定的结果。
+
+> [!TIP]
+> moderate /ˈmɒdəɹeɪt/ [adj.] [v.] 温和的，适中的； 缓和。在互联网用语中也表示（内容）审核。
 
 当词库更新时：
 
