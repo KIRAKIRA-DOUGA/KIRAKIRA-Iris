@@ -6,6 +6,12 @@ const both: ModerationResult = await iris.moderate('example');
 const keyword: KeywordResult = iris.keywordModerate('example');
 const ai: AIResult = await iris.aiModerate('example');
 void [both, keyword, ai];
+const refreshedWords: string[] = ['新的关键词'];
+iris.refreshKeywords(refreshedWords);
+iris.refreshKeywords(['只读关键词'] as const);
+iris.refreshKeywords([{ word: 'metadata', comment: 'updated' }]);
+// @ts-expect-error Refresh requires an array, not a single string.
+iris.refreshKeywords('invalid');
 // @ts-expect-error Severity no longer exists.
 createIris({ keywords: [{ word: 'x', severity: 'general' }] });
 // @ts-expect-error Keyword filtering cannot be disabled.

@@ -134,6 +134,7 @@ export interface AIOptions {
 }
 
 export interface IrisOptions {
+  /** Compiled once at initialization; call refreshKeywords to replace it later. */
   keywords?: readonly Keyword[];
   maxInputLength?: number;
   maxMatches?: number;

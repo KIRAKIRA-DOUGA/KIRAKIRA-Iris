@@ -36,6 +36,17 @@ const ai = await iris.aiModerate(content);       // 只查 AI，不依赖关键�
 - AI 超时、失败或被丢弃时返回明确状态，`needsReview: true`；原有关键词命中始终保留。
 - 关键词也可传 `{ word, comment?, id?, category? }`，词库由调用者选择和加载，库不自动下载或更新。
 
+词库支持 `string[]`（也接受只读数组），初始化时载入并编译一次，后续审核复用。同一实例可用 `iris.refreshKeywords(newKeywords)` **全量替换**词库：
+
+```ts
+// 放在你的词库更新回调或管理接口中，按需调用。
+function onKeywordsUpdated(newKeywords: string[]) {
+  iris.refreshKeywords(newKeywords);
+}
+```
+
+刷新是同步操作，校验和编译成功后才切换；失败时保留原词库。传入 `[]` 可清空。已提交或排队的审核保留原关键词结果，之后的调用使用新词库。
+
 ## 匹配与位置
 
 同时匹配原文和归一化文本：NFKC、小写、去符号/空白/零宽字符，以及 [OpenCC](https://github.com/nk2028/opencc-js) 繁简字形折叠。输入和词库采用同一规则，例如 `危-險\n詞` 可命中 `危险词`。字形折叠可能合并多义字，不做地域词汇翻译（如“軟體”→“软件”）。

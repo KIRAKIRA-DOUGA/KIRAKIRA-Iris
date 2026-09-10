@@ -3,7 +3,7 @@ import { IrisAIError } from './errors.js';
 import { KeywordMatcher } from './keywords.js';
 import { normalizeText } from './normalize.js';
 import { AIScheduler } from './scheduler.js';
-import type { AIOptions, AIQueueStats, IrisOptions, KeywordResult, ModerateOptions, ModerationResult, NormalizedText } from './types.js';
+import type { AIOptions, AIQueueStats, IrisOptions, Keyword, KeywordResult, ModerateOptions, ModerationResult, NormalizedText } from './types.js';
 
 function integer(value: number | undefined, name: string, minimum = 1): void {
   if (value !== undefined && (!Number.isSafeInteger(value) || value < minimum || value > 2_147_483_647)) {
@@ -17,7 +17,7 @@ function booleanOption(value: boolean | undefined, name: string): void {
 
 export class Iris {
   private readonly ai: AIOptions | undefined;
-  private readonly matcher: KeywordMatcher;
+  private matcher: KeywordMatcher;
   private readonly scheduler: AIScheduler;
   private readonly maxInputLength: number;
   private readonly maxMatches: number;
@@ -84,6 +84,15 @@ export class Iris {
     } catch (error) {
       return failedAIResult(ai, error);
     }
+  }
+
+  /**
+   * Replace the entire dictionary. Compile before swapping so invalid input
+   * leaves the current dictionary intact. Pending AI reviews keep their keyword results.
+   */
+  refreshKeywords(keywords: readonly Keyword[]): void {
+    const next = new KeywordMatcher(keywords);
+    this.matcher = next;
   }
 
   /** Synchronous and local. Every keyword hit is illegal. */
