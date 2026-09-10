@@ -1,43 +1,46 @@
 # KIRAKIRA-Iris
 
-Node.js 22+ 内容审核包，支持 TypeScript、ESM 和 CommonJS。无内置屏蔽词库，无关键词分级。
+KIRAKIRA 的内容审核模块，以 Node.js 包分发。支持 TypeScript、ESM 和 CommonJS。需要 Node.js 22 以上版本。
+
+出于安全考虑，不提供屏蔽词库，您可以在以下开源存储库中自行获取。  
+| 存储库 | 网址 |
+|---|---|
+| Konsheng/Sensitive-lexicon | https://github.com/Konsheng/Sensitive-lexicon |
+| 57ing/Sensitive-word | https://github.com/57ing/Sensitive-word |
+| fwwdn/sensitive-stop-words | https://github.com/fwwdn/sensitive-stop-words |
+
+作为最佳实践，您可以像 KIRAKIRA 主站一样，在一个持久化的数据库（例如 MongoDB）中托管关键词库，并允许管理员随时修改。
 
 ## 使用
 
-包发布后安装：`npm install kirakira-iris`。源码开发：`npm ci && npm run check`。
+安装：
+``` shell
+npm install kirakira-iris
+```
 
+使用：
 ```ts
 import { readFileSync } from 'node:fs';
 import { createIris } from 'kirakira-iris';
 
-// 从你选择的开源词库取得文件；一行一词。也可直接传 string[]。
-const keywords = readFileSync('./keywords.txt', 'utf8')
-  .split(/\r?\n/).map(word => word.trim()).filter(Boolean);
-
+const keywords = ['badword1', 'badword2']
 const iris = createIris({
   keywords,
-  ai: { // 不需要 AI 时省略整个 ai 配置。
-    apiKey: 'your-openrouter-token', // 必须传字符串，不读取环境变量。
+  ai: { // 可选的
+    apiKey: 'your-openrouter-token',
     rateLimit: { maxRequests: 20, intervalMs: 60_000 },
     maxConcurrent: 1,
     maxQueueSize: 100,
   },
 });
 
-const content = '待审核内容';
-const both = await iris.moderate(content);       // 查关键词，命中后追加 AI
-const keyword = iris.keywordModerate(content);  // 只查关键词，同步
-const ai = await iris.aiModerate(content);       // 只查 AI，不依赖关键词命中
+const content = 'user-content';                 // 待审核内容
+const both = await iris.moderate(content);      // 同时使用关键词与 AI 审查
+const keyword = iris.keywordModerate(content);  // 只使用关键词审查
+const ai = await iris.aiModerate(content);      // 只使用 AI 审查
+
 ```
-
-- **关键词只要命中，`isIllegal` 必定为 `true`，AI 无权推翻。** 没有关闭关键词的开关。
-- `moderate` 返回 `{ isIllegal, needsReview, keywordResult, aiResult }`；无关键词命中时不调用 AI。空词库同样不会触发 AI，需要全文 AI 审核时调用 `aiModerate`。
-- `keywordModerate` 返回 `KeywordResult`；`aiModerate` 返回 `AIResult`。`ai.result` 的 `true` / `false` 分别表示不安全 / 安全，`null` 表示未得到完整结论。
-- AI 超时、失败或被丢弃时返回明确状态，`needsReview: true`；原有关键词命中始终保留。
-- 关键词也可传 `{ word, comment?, id?, category? }`，词库由调用者选择和加载，库不自动下载或更新。
-
-词库支持 `string[]`（也接受只读数组），初始化时载入并编译一次，后续审核复用。同一实例可用 `iris.refreshKeywords(newKeywords)` **全量替换**词库：
-
+更新词库时
 ```ts
 // 放在你的词库更新回调或管理接口中，按需调用。
 function onKeywordsUpdated(newKeywords: string[]) {
