@@ -30,9 +30,7 @@ const iris = createIris({
   keywords,
   ai: { // 可选的
     apiKey: 'your-openrouter-api-key',
-    rateLimit: { maxRequests: 20, intervalMs: 60_000 },
-    maxConcurrent: 1,
-    maxQueueSize: 100,
+    // model: '供应商/模型ID', // 切换模型时填写；省略则使用默认安全模型
   },
 });
 
@@ -71,30 +69,28 @@ function onKeywordsUpdated(newKeywords: string[]) {
 | `iris.clearAIQueue()` | `number` | 清空等待队列，返回移除数量 |
 | `iris.getAIQueueStats()` | `AIQueueStats` | 查询当前队列 |
 
-初始化参数（词库只接受字符串数组，也接受只读数组）：
+常用初始化参数（词库只接受字符串数组，也接受只读数组；其余高级选项见[详细说明](docs/ai-and-cancellation.md#高级选项什么时候才需要)）：
 
 ```ts
 interface IrisOptions {
   keywords?: readonly string[]; // 默认 []；调用者自行加载，初始化后复用
-  maxInputLength?: number;      // 默认 100000，原文 UTF-16 长度上限
-  maxMatches?: number;          // 默认 10000，两组命中列表的条数之和上限
+  maxInputLength?: number;      // 默认 100000，原文 content.length 的上限
+  maxMatches?: number;          // 默认 10000，原文与其归一化文本一共最多可以匹配到的关键词数量
   ai?: {                       // 省略时不启用 AI
     apiKey: string;             // 必须显式传入，不读取环境变量
     model?: string;             // 默认下文的 NVIDIA 安全模型
-    rateLimit?: { maxRequests: number; intervalMs: number }; // 默认 20 次 / 60000ms
-    maxConcurrent?: number;     // 默认 1，包含等待限速额度的执行中审核
+    rateLimit?: { maxRequests: number; intervalMs: number }; // 默认最近 60000ms 内最多发出 20 次请求
+    maxConcurrent?: number;     // 默认 1，同时执行的 AI 审核数量上限
     maxQueueSize?: number;      // 默认 100；0 表示不排队
     timeoutMs?: number;         // 默认 30000，仅计算实际请求耗时
     maxTokens?: number;         // 默认 512，最大输出 token 数
-    protocol?: 'auto' | 'nemotron' | 'json'; // 默认 auto
-    policy?: string;            // 可选应用规则，仅用于 JSON 协议
-    structuredOutput?: boolean; // 默认 false，仅用于支持 JSON Schema 的模型
-    fetch?: typeof globalThis.fetch; // 可选自定义请求实现
   };
 }
 ```
 
 数值配置为正整数，`maxQueueSize` 允许为 0。非法输入或配置抛出 `TypeError` / `RangeError`；超过长度或命中数上限也会抛出 `RangeError`，不会返回截断结果。
+
+`maxInputLength` 与 JavaScript 的字符串 `.length` 一致：`"测试"` 是 2，`"test"` 是 4，`"😀"` 是 2，计量单位为 UTF-16 代码单元。`maxMatches` 按**命中次数**计数，不是去重后的词语种类：同一关键词在原文和归一化文本中各命中一次，共计 2 次。
 
 ## 关键词匹配与位置
 
@@ -123,7 +119,7 @@ interface KeywordMatch {
 
 ## AI 审查与队列
 
-默认模型：[`nvidia/nemotron-3.5-content-safety:free`](https://openrouter.ai/nvidia/nemotron-3.5-content-safety:free)，用 `ai.model` 切换。这个专用安全模型输出 `User Safety: safe/unsafe` 标签；普通聊天模型由 Iris 提示返回 JSON，例如 `{"status":"pass","comment":"通过"}`，其中 `status` 为 `pass` 或 `block`。两种响应统一转换为下方类型。模型区别及取消示例见[详细说明](docs/ai-and-cancellation.md)。
+默认模型：[`nvidia/nemotron-3.5-content-safety:free`](https://openrouter.ai/nvidia/nemotron-3.5-content-safety:free)。**普通接入只需 `apiKey`，切换模型再提供 `model`。** 提示词、输出格式选择和解析由 Iris 处理，返回类型保持一致。模型支持情况、高级选项及取消示例见[详细说明](docs/ai-and-cancellation.md)。
 
 ```ts
 interface ModerateOptions {
@@ -157,6 +153,10 @@ interface AIQueueStats {
 `moderate` 未命中时不会进入 AI 队列；`aiModerate` 不要求关键词命中。AI 始终只审查原文，每次最多一次请求。归一化仅用于关键词匹配。
 
 队列按实例共享，先进先出；不同实例/进程不共享限额。满额时丢弃新审核，返回 `drop` / `QUEUE_FULL`。`clearAIQueue()` 同步移除所有 `queued`，对应 Promise 返回 `drop` / `QUEUE_CLEARED`；已有关键词结果保留，`active` 继续执行，限速记录不重置。空队列返回 0，之后仍可提交新审核。
+
+`intervalMs` 是限速统计窗口，单位毫秒。有可用额度和空闲执行位置时立即发请求，**不需要固定等待 60 秒**。例如最近 60 秒已经发满 20 次，就等最早那次请求移出统计窗口后再发送；大量消息积压时，等待可能超过 60 秒。
+
+`maxConcurrent` 控制同时执行多少次 AI 审核：1 表示逐个执行，3 表示最多同时执行 3 个，其余排队。已经取得执行位置、但正在等待限速额度的审核也占用这个数量。提高并发数不会提高 `rateLimit` 的请求额度。
 
 `signal` 由调用者控制，可用于用户撤回、请求断开或给整个排队和审查过程设置期限。取消后返回 `drop` / `ABORTED`。`ai.timeoutMs` 仅限制实际请求耗时，超时为 `drop` / `TIMEOUT`。库不自动重试或切换付费模型。
 

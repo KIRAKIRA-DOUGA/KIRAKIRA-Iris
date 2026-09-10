@@ -52,6 +52,7 @@ export interface ModerationResult {
 export interface AIRateLimit {
   /** Maximum outbound HTTP requests in any sliding interval. */
   maxRequests: number;
+  /** Sliding counting window in milliseconds, not a fixed delay before each request. */
   intervalMs: number;
 }
 
@@ -67,29 +68,33 @@ export interface AIQueueStats {
 export interface AIOptions {
   /** Required explicit token string. Never read from the environment. */
   apiKey: string;
+  /** OpenRouter model ID. Omit for the default safety model; response parsing is automatic. */
   model?: string;
+  /** Advanced: override automatic response format selection. Usually omit. */
   protocol?: 'auto' | 'nemotron' | 'json';
   /** Per HTTP request, starting after rate-limit admission. Default 30,000ms. */
   timeoutMs?: number;
   maxTokens?: number;
   /** Default 20 requests per 60,000ms; shared by both AI-capable methods. */
   rateLimit?: AIRateLimit;
-  /** Running review jobs per Iris instance. Default 1. */
+  /** Maximum simultaneous review jobs, including jobs waiting for rate allowance. Default 1. */
   maxConcurrent?: number;
   /** Waiting jobs excluding running jobs. Default 100; 0 disables waiting. */
   maxQueueSize?: number;
-  /** JSON protocol only. */
+  /** Advanced: append application-specific moderation rules. JSON protocol only. */
   policy?: string;
-  /** Opt-in JSON Schema for compatible JSON models. */
+  /** Advanced: opt-in JSON Schema for compatible JSON models. Usually omit. */
   structuredOutput?: boolean;
+  /** Advanced: custom network transport for proxy integration or tests. Usually omit. */
   fetch?: typeof globalThis.fetch;
 }
 
 export interface IrisOptions {
   /** Compiled once at initialization; call refreshKeywords to replace it later. */
   keywords?: readonly string[];
+  /** Maximum source.length in UTF-16 code units. Default 100,000. */
   maxInputLength?: number;
-  /** Maximum total entries across both match arrays. Default 10,000. */
+  /** 原文与其归一化文本一共最多可以匹配到的关键词数量，按命中次数累计。默认 10000。 */
   maxMatches?: number;
   /** Omit for keyword-only use. Configuring AI requires an explicit token. */
   ai?: AIOptions;
