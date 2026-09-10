@@ -94,11 +94,9 @@ test('FIFO jobs share concurrency between moderate and aiModerate; overflow drop
   const overflow = await iris.moderate('命中');
   await flush();
   assert.deepEqual(iris.getAIQueueStats(), { active: 1, queued: 2, maxConcurrent: 1, maxQueueSize: 2 });
-  assert.equal(overflow.isIllegal, true);
-  assert.equal(overflow.aiResult.status, 'dropped');
-  assert.equal(overflow.aiResult.result, null);
+  assert.equal(overflow.hit, true);
+  assert.equal(overflow.aiResult.status, 'drop');
   assert.equal(overflow.aiResult.error.code, 'QUEUE_FULL');
-  assert.equal(overflow.needsReview, true);
   assert.deepEqual(requests.map(request => request.input), ['命中']);
   requests[0].resolve(reply());
   await first;
@@ -123,7 +121,7 @@ test('parallel reviewers respect maxConcurrent and a zero-length waiting queue',
   const second = iris.aiModerate('second');
   const third = await iris.aiModerate('third');
   await flush();
-  assert.equal(third.status, 'dropped');
+  assert.equal(third.status, 'drop');
   assert.equal(pending.length, 2);
   assert.equal(iris.getAIQueueStats().active, 2);
   for (const request of pending) request.resolve(reply());
@@ -164,8 +162,8 @@ test('failed or timed-out work frees concurrency slots for the next queued job',
       },
     } });
     const [first, second] = await Promise.all([iris.aiModerate('first'), iris.aiModerate('second')]);
-    assert.equal(first.status, 'error');
-    assert.equal(second.status, 'completed');
+    assert.equal(first.status, 'drop');
+    assert.equal(second.status, 'pass');
     assert.equal(iris.getAIQueueStats().active, 0);
   }
 });
@@ -191,7 +189,6 @@ test('abort while waiting for a rate allowance never submits that review', async
   controller.abort();
   const result = await pending;
   assert.equal(result.error.code, 'ABORTED');
-  assert.equal(result.assessments.length, 0);
   assert.equal(mock.calls.length, 1);
   assert.equal(iris.getAIQueueStats().active, 0);
 });
@@ -199,7 +196,7 @@ test('abort while waiting for a rate allowance never submits that review', async
 test('rate limiting is independent for different Iris instances', async () => {
   const options = { ai: { apiKey: 'token', rateLimit: { maxRequests: 1, intervalMs: 60_000 }, fetch: mockFetch().fetch } };
   const results = await Promise.all([createIris(options).aiModerate('one'), createIris(options).aiModerate('two')]);
-  assert.deepEqual(results.map(result => result.status), ['completed', 'completed']);
+  assert.deepEqual(results.map(result => result.status), ['pass', 'pass']);
 });
 
 test('clearing the shared queue settles every discarded review, preserves keyword hits and allows refilling', async () => {
@@ -225,24 +222,20 @@ test('clearing the shared queue settles every discarded review, preserves keywor
   assert.equal(iris.clearAIQueue(), 0);
   const [combinedResult, aiResult] = await Promise.all([combined, queued]);
   for (const result of [combinedResult.aiResult, aiResult]) {
-    assert.equal(result.status, 'dropped');
-    assert.equal(result.result, null);
+    assert.equal(result.status, 'drop');
     assert.equal(result.skipReason, 'queue-cleared');
-    assert.equal(result.needsReview, true);
     assert.deepEqual(result.error, {
       code: 'QUEUE_CLEARED', message: 'AI 等待队列已清空，本次审核已放弃。', status: null, retryable: false,
     });
-    assert.deepEqual(result.assessments, []);
   }
   assert.equal(combinedResult.keywordResult.hit, true);
-  assert.equal(combinedResult.isIllegal, true);
-  assert.equal(combinedResult.needsReview, true);
+  assert.equal(combinedResult.hit, true);
   controller.abort();
   const replacement = iris.aiModerate('replacement');
   assert.equal(iris.getAIQueueStats().queued, 1);
   firstRequest.resolve(reply());
   const completed = await Promise.all([active, replacement]);
-  assert.deepEqual(completed.map(result => result.status), ['completed', 'completed']);
+  assert.deepEqual(completed.map(result => result.status), ['pass', 'pass']);
   assert.deepEqual(calls, ['active', 'replacement']);
   assert.equal(iris.getAIQueueStats().active, 0);
 });

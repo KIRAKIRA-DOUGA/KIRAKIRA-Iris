@@ -2,18 +2,18 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createIris, normalizeText, mapNormalizedRange, mapSourceRange } from '../dist/esm/index.js';
 
-test('raw and normalized matches retain every occurrence and merge equivalent spans', () => {
+test('raw and normalized arrays retain independent matches and mapped source offsets', () => {
   const source = '前危险词危\n-险\u200b词后危险词';
   const result = createIris({ keywords: ['危险词'] }).keywordModerate(source);
   assert.equal(result.hit, true);
-  assert.equal(result.hite, true);
-  assert.equal(result.isIllegal, true);
-  assert.equal(result.hitWord, result.hiteWord);
-  assert.equal(result.matches.length, 3);
-  assert.deepEqual(result.matches[0].matchedIn, ['source', 'normalized']);
-  assert.deepEqual(result.matches[1].matchedIn, ['normalized']);
-  for (const match of result.matches) {
-    assert.equal(source.slice(match.wordStartInSource, match.wordEndInSource), match.sourceText);
+  assert.equal(result.matchesInSource.length, 2);
+  assert.equal(result.matchesInNormalize.length, 3);
+  for (const match of result.matchesInSource) {
+    assert.equal(source.slice(match.wordStartInSource, match.wordEndInSource), '危险词');
+  }
+  for (const match of result.matchesInNormalize) {
+    assert.equal(match.hitWord, '危险词');
+    assert.equal(normalizeText(source.slice(match.wordStartInSource, match.wordEndInSource)).normalizeString, '危险词');
     assert.equal(result.normalizeString.slice(match.wordStartInNormalize, match.wordEndInNormalize), '危险词');
   }
 });
@@ -21,10 +21,12 @@ test('raw and normalized matches retain every occurrence and merge equivalent sp
 test('normalizes fullwidth, punctuation, emoji and invisible spacing on both sides', () => {
   const iris = createIris({ keywords: ['ＢＡＤ'] });
   const result = iris.keywordModerate('💜b.a\nd\u200b\uFEFF');
-  assert.equal(result.isIllegal, true);
+  assert.equal(result.hit, true);
   assert.equal(result.normalizeString, 'bad');
-  assert.equal(result.wordStartInSource, 2);
-  assert.equal(result.wordEndInSource, 7);
+  assert.equal(result.matchesInSource.length, 0);
+  assert.equal(result.matchesInNormalize[0].hitWord, 'ＢＡＤ');
+  assert.equal(result.matchesInNormalize[0].wordStartInSource, 2);
+  assert.equal(result.matchesInNormalize[0].wordEndInSource, 7);
   assert.equal(normalizeText('Ａ-Ｂ\nＣ\u200B\uFEFF\t💜危險\r\n詞').normalizeString, 'abc危险词');
 });
 
@@ -35,7 +37,8 @@ test('simplified, traditional and mixed Chinese match in both directions', () =>
       const result = iris.keywordModerate(source);
       assert.equal(result.hit, true, keyword + ': ' + source);
       assert.equal(result.normalizeString, '危险词');
-      assert.equal(result.matches[0].sourceText, source);
+      const match = result.matchesInNormalize[0];
+      assert.equal(source.slice(match.wordStartInSource, match.wordEndInSource), source);
     }
   }
 });
@@ -50,10 +53,11 @@ test('Chinese many-to-one variants share canonical characters without translatin
 test('traditional Chinese offsets remain UTF-16 source positions after emoji and obfuscation', () => {
   const source = '💜前危\u200b險-詞後';
   const result = createIris({ keywords: ['危险词'] }).keywordModerate(source);
-  assert.equal(result.wordStartInSource, 3);
-  assert.equal(result.wordEndInSource, 8);
-  assert.equal(source.slice(result.wordStartInSource, result.wordEndInSource), '危\u200b險-詞');
-  assert.equal(result.normalizeString.slice(result.wordStartInNormalize, result.wordEndInNormalize), '危险词');
+  const match = result.matchesInNormalize[0];
+  assert.equal(match.wordStartInSource, 3);
+  assert.equal(match.wordEndInSource, 8);
+  assert.equal(source.slice(match.wordStartInSource, match.wordEndInSource), '危\u200b險-詞');
+  assert.equal(result.normalizeString.slice(match.wordStartInNormalize, match.wordEndInNormalize), '危险词');
 });
 
 test('grapheme composition preserves split accents, Hangul and supplementary characters', () => {
@@ -93,49 +97,53 @@ test('shared scan preserves distinct raw/normalized ranges for combining graphem
   const source = 'a\u0321';
   const result = createIris({ keywords: ['a'] }).keywordModerate(source);
   assert.equal(result.normalizeString, source);
-  assert.equal(result.matches.length, 2);
-  assert.equal(result.matches[0].wordEndInSource, 1);
-  assert.equal(result.matches[1].wordEndInSource, 2);
+  assert.equal(result.matchesInSource.length, 1);
+  assert.equal(result.matchesInNormalize.length, 1);
+  assert.equal(result.matchesInSource[0].wordEndInSource, 1);
+  assert.equal(result.matchesInNormalize[0].wordEndInSource, 2);
 });
 
-test('all hits are illegal and summary uses source order, retaining custom comments', () => {
-  const result = createIris({ keywords: ['第二', { word: '第一', id: 'rule-1', category: 'test', comment: '自定义评论' }] }).keywordModerate('第一第二');
-  assert.equal(result.isIllegal, true);
-  assert.equal(result.hitWord, '第一');
-  assert.equal(result.comment, '自定义评论');
-  assert.equal(result.matches[0].id, 'rule-1');
-  assert.equal(result.matches[0].category, 'test');
-  assert.equal('severity' in result, false);
-  assert.equal('severity' in result.matches[0], false);
+test('public keyword results contain only hit, text and two sorted match arrays', () => {
+  const result = createIris({ keywords: ['第二', '第一'] }).keywordModerate('第一第二');
+  assert.deepEqual(Object.keys(result).sort(), ['hit', 'matchesInNormalize', 'matchesInSource', 'normalizeString']);
+  for (const matches of [result.matchesInSource, result.matchesInNormalize]) {
+    assert.deepEqual(matches.map(match => match.hitWord), ['第一', '第二']);
+    assert.deepEqual(Object.keys(matches[0]).sort(), ['hitWord', 'wordEndInNormalize', 'wordEndInSource', 'wordStartInNormalize', 'wordStartInSource']);
+  }
+  result.matchesInSource[0].hitWord = 'changed';
+  assert.equal(result.matchesInNormalize[0].hitWord, '第一');
 });
 
 test('no embedded keywords; empty dictionary stays empty', () => {
   const result = createIris().keywordModerate('任意内容 dangerous bad');
   assert.equal(result.hit, false);
-  assert.equal(result.isIllegal, false);
-  assert.equal(result.hitWord, null);
-  assert.equal(result.wordStartInSource, -1);
-  assert.deepEqual(result.matches, []);
+  assert.deepEqual(result.matchesInSource, []);
+  assert.deepEqual(result.matchesInNormalize, []);
 });
 
 test('symbols-only rules match the original text with no normalized interval', () => {
   const result = createIris({ keywords: ['!!!'] }).keywordModerate('!!!');
-  assert.equal(result.isIllegal, true);
-  assert.equal(result.wordStartInNormalize, -1);
-  assert.equal(result.wordEndInNormalize, -1);
-  assert.deepEqual(result.matches[0].matchedIn, ['source']);
+  assert.equal(result.hit, true);
+  assert.equal(result.matchesInSource[0].hitWord, '!!!');
+  assert.equal(result.matchesInSource[0].wordStartInNormalize, -1);
+  assert.equal(result.matchesInSource[0].wordEndInNormalize, -1);
+  assert.deepEqual(result.matchesInNormalize, []);
 });
 
 test('Aho-Corasick emits overlaps, suffixes and duplicate rules', () => {
-  assert.equal(createIris({ keywords: ['a', 'aa', 'aaa', 'aa'] }).keywordModerate('aaa').matches.length, 8);
-  assert.deepEqual(createIris({ keywords: ['he', 'she', 'hers', 'his'] }).keywordModerate('ushers').matches.map(match => match.hitWord), ['she', 'he', 'hers']);
+  const result = createIris({ keywords: ['a', 'aa', 'aaa', 'aa'] }).keywordModerate('aaa');
+  assert.equal(result.matchesInSource.length, 8);
+  assert.equal(result.matchesInNormalize.length, 8);
+  assert.deepEqual(createIris({ keywords: ['he', 'she', 'hers', 'his'] }).keywordModerate('ushers').matchesInSource.map(match => match.hitWord), ['she', 'he', 'hers']);
 });
 
 test('compatibility expansions retain separate normalized matches', () => {
   const result = createIris({ keywords: ['f'] }).keywordModerate('ﬃ');
-  assert.equal(result.matches.length, 2);
-  assert.deepEqual(result.matches.map(match => match.wordStartInNormalize), [0, 1]);
-  for (const match of result.matches) assert.equal(match.sourceText, 'ﬃ');
+  assert.equal(result.matchesInSource.length, 0);
+  assert.deepEqual(result.matchesInNormalize.map(match => match.wordStartInNormalize), [0, 1]);
+  for (const match of result.matchesInNormalize) {
+    assert.equal('ﬃ'.slice(match.wordStartInSource, match.wordEndInSource), 'ﬃ');
+  }
 });
 
 test('range helpers reject invalid ranges and project stripped characters to -1', () => {
@@ -150,16 +158,20 @@ test('range helpers reject invalid ranges and project stripped characters to -1'
 test('limits reject rather than returning truncated review results', () => {
   assert.throws(() => createIris({ maxInputLength: 2 }).keywordModerate('abc'), /maxInputLength/);
   assert.throws(() => createIris({ maxMatches: 2, keywords: ['a'] }).keywordModerate('aaa'), /maxMatches/);
+  assert.throws(() => createIris({ maxMatches: 1, keywords: ['a'] }).keywordModerate('a'), /maxMatches/);
+  const result = createIris({ maxMatches: 2, keywords: ['a'] }).keywordModerate('a');
+  assert.equal(result.matchesInSource.length + result.matchesInNormalize.length, 2);
 });
 
-test('caller rules are copied; invalid and obsolete keyword configuration is rejected', () => {
-  const mutable = [{ word: 'a' }];
+test('caller strings are copied and object keywords are rejected', () => {
+  const mutable = ['a'];
   const iris = createIris({ keywords: mutable });
-  mutable[0].word = 'b';
+  mutable[0] = 'b';
   assert.equal(iris.keywordModerate('a').hit, true);
-  for (const keyword of ['', ' ', {}, { word: 'a', comment: 3 }, { word: 'a', severity: 'general' }]) {
+  for (const keyword of ['', ' ', {}, { word: 'a' }, { word: 'a', comment: 'x' }, null, 3, undefined]) {
     assert.throws(() => createIris({ keywords: [keyword] }), TypeError);
   }
+  assert.throws(() => createIris({ keywords: new Array(1) }), TypeError);
 });
 
 test('seeded fuzz matches an exhaustive literal reference for every occurrence', () => {
@@ -169,14 +181,16 @@ test('seeded fuzz matches an exhaustive literal reference for every occurrence',
   for (let trial = 0; trial < 100; trial++) {
     const keywords = Array.from({ length: 15 }, () => word(1 + Math.floor(random() * 5)));
     const input = word(50);
-    const actual = createIris({ keywords }).keywordModerate(input).matches
-      .map(match => `${match.ruleIndex}:${match.wordStartInSource}:${match.wordEndInSource}`).sort();
+    const result = createIris({ keywords }).keywordModerate(input);
     const expected = [];
-    keywords.forEach((keyword, index) => {
+    keywords.forEach(keyword => {
       for (let start = 0; start <= input.length - keyword.length; start++) {
-        if (input.startsWith(keyword, start)) expected.push(`${index}:${start}:${start + keyword.length}`);
+        if (input.startsWith(keyword, start)) expected.push(`${keyword}:${start}:${start + keyword.length}`);
       }
     });
-    assert.deepEqual(actual, expected.sort());
+    for (const matches of [result.matchesInSource, result.matchesInNormalize]) {
+      const actual = matches.map(match => `${match.hitWord}:${match.wordStartInSource}:${match.wordEndInSource}`).sort();
+      assert.deepEqual(actual, expected.sort());
+    }
   }
 });

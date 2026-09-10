@@ -7,16 +7,16 @@ import { createIris } from 'kirakira-iris';
 
 test('ESM package export is usable', async () => {
   const result = await createIris().moderate('test');
-  assert.equal(result.isIllegal, false);
+  assert.equal(result.hit, false);
 });
 
 test('CommonJS package export is usable', async () => {
   const require = createRequire(import.meta.url);
   const pkg = require('kirakira-iris');
   const result = await pkg.createIris().moderate('test');
-  assert.equal(result.isIllegal, false);
+  assert.equal(result.hit, false);
   assert.equal(typeof pkg.normalizeText, 'function');
-  assert.equal(pkg.createIris({ keywords: ['危险词'] }).keywordModerate('危險詞').isIllegal, true);
+  assert.equal(pkg.createIris({ keywords: ['危险词'] }).keywordModerate('危險詞').hit, true);
 });
 
 test('release validation accepts only the exact stable version tag', () => {

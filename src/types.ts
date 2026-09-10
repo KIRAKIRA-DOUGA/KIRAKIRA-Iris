@@ -1,13 +1,3 @@
-export interface KeywordRule {
-  word: string;
-  comment?: string;
-  id?: string;
-  category?: string;
-}
-
-/** Caller-supplied strings or metadata-bearing rules. No built-in blacklist. */
-export type Keyword = string | KeywordRule;
-
 /** UTF-16 indices, with an exclusive end. */
 export interface SourceSpan { start: number; end: number }
 
@@ -18,16 +8,8 @@ export interface NormalizedText {
 }
 
 export interface KeywordMatch {
-  ruleIndex: number;
-  id: string | null;
+  /** The original keyword supplied by the caller, before normalization. */
   hitWord: string;
-  /** Compatibility alias for hitWord. */
-  hiteWord: string;
-  category: string | null;
-  comment: string;
-  matchedIn: Array<'source' | 'normalized'>;
-  sourceText: string;
-  normalizedText: string;
   wordStartInSource: number;
   wordEndInSource: number;
   wordStartInNormalize: number;
@@ -35,35 +17,10 @@ export interface KeywordMatch {
 }
 
 export interface KeywordResult {
-  status: 'completed';
   hit: boolean;
-  /** Compatibility alias for hit. */
-  hite: boolean;
-  /** First match in source order. */
-  hitWord: string | null;
-  hiteWord: string | null;
-  /** Always equal to hit. */
-  isIllegal: boolean;
-  comment: string;
   normalizeString: string;
-  wordStartInSource: number;
-  wordEndInSource: number;
-  wordStartInNormalize: number;
-  wordEndInNormalize: number;
-  matches: KeywordMatch[];
-}
-
-export interface ParsedAIResult {
-  /** true means unsafe / violates the moderation policy. */
-  result: boolean;
-  comment: string;
-  categories: string[];
-}
-
-export interface AIAssessment extends ParsedAIResult {
-  input: 'source';
-  model: string;
-  requestId: string | null;
+  matchesInSource: KeywordMatch[];
+  matchesInNormalize: KeywordMatch[];
 }
 
 export type AIErrorCode = 'MISSING_API_KEY' | 'HTTP_ERROR' | 'API_ERROR'
@@ -77,22 +34,17 @@ export interface AIErrorInfo {
 }
 
 export interface AIResult {
-  status: 'completed' | 'skipped' | 'disabled' | 'error' | 'dropped';
-  /** null means no complete AI verdict, never a safe verdict. */
-  result: boolean | null;
-  needsReview: boolean;
+  /** drop means no AI verdict, including skipped, cancelled and failed reviews. */
+  status: 'pass' | 'block' | 'drop';
   comment: string;
   model: string;
-  categories: string[];
-  assessments: AIAssessment[];
   skipReason: 'not-configured' | 'empty-input' | 'no-keyword-hit' | 'queue-full' | 'queue-cleared' | null;
   error: AIErrorInfo | null;
 }
 
 export interface ModerationResult {
   /** A keyword hit cannot be cleared by any AI outcome. */
-  isIllegal: boolean;
-  needsReview: boolean;
+  hit: boolean;
   keywordResult: KeywordResult;
   aiResult: AIResult;
 }
@@ -135,8 +87,9 @@ export interface AIOptions {
 
 export interface IrisOptions {
   /** Compiled once at initialization; call refreshKeywords to replace it later. */
-  keywords?: readonly Keyword[];
+  keywords?: readonly string[];
   maxInputLength?: number;
+  /** Maximum total entries across both match arrays. Default 10,000. */
   maxMatches?: number;
   /** Omit for keyword-only use. Configuring AI requires an explicit token. */
   ai?: AIOptions;

@@ -42,7 +42,7 @@ const keyword = iris.keywordModerate(content);   // 只使用关键词审查
 const ai = await iris.aiModerate(content);       // 只使用 AI 审查
 ```
 
-`moderate` 函数始终使用关键词检查内容，如果在 `createIris` 时配置了 AI，也会使用 AI 审查命中关键词的内容（AI 仅审查原文，不审查归一化后的内容）。关键词只要命中，最终 `isIllegal` 必定为 `true`，AI 不会推翻关键词判定的结果。
+`moderate` 函数始终使用关键词检查内容，如果在 `createIris` 时配置了 AI，也会使用 AI 审查命中关键词的内容（AI 仅审查原文，不审查归一化后的内容）。关键词只要命中，最终 `hit` 必定为 `true`，AI 不会推翻关键词判定的结果。
 
 > [!TIP]
 > moderate /ˈmɒdəɹeɪt/ [adj.] [v.] 温和的，适中的； 缓和。在互联网用语中也表示（内容）审核。
@@ -59,153 +59,106 @@ function onKeywordsUpdated(newKeywords: string[]) {
 
 刷新是同步操作，校验和编译成功后才切换；失败时保留原词库。传入 `[]` 可清空。已提交或排队的审核保留原关键词结果，之后的调用使用新词库。
 
-## 关键词匹配与位置
+## 常用函数
 
-`iris.keywordModerate(content: string): KeywordResult` 是同步方法。词库接受 `string[]` / 只读数组，也可使用 `{ word, comment?, id?, category? }` 提供规则信息；初始化和刷新时编译，审核时复用。
+| 调用 | 返回类型 | 用途 |
+| --- | --- | --- |
+| `createIris(options?: IrisOptions)` | `Iris` | 初始化并编译词库 |
+| `iris.refreshKeywords(keywords: readonly string[])` | `void` | 同步全量替换词库，`[]` 清空 |
+| `iris.keywordModerate(content: string)` | `KeywordResult` | 同步关键词匹配 |
+| `iris.aiModerate(content: string, options?: ModerateOptions)` | `Promise<AIResult>` | 独立 AI 审查原文 |
+| `iris.moderate(content: string, options?: ModerateOptions)` | `Promise<ModerationResult>` | 关键词命中后追加可选 AI 审查 |
+| `iris.clearAIQueue()` | `number` | 清空等待队列，返回移除数量 |
+| `iris.getAIQueueStats()` | `AIQueueStats` | 查询当前队列 |
+
+初始化参数（词库只接受字符串数组，也接受只读数组）：
+
+```ts
+interface IrisOptions {
+  keywords?: readonly string[]; // 默认 []；调用者自行加载，初始化后复用
+  maxInputLength?: number;      // 默认 100000，原文 UTF-16 长度上限
+  maxMatches?: number;          // 默认 10000，两组命中列表的条数之和上限
+  ai?: {                       // 省略时不启用 AI
+    apiKey: string;             // 必须显式传入，不读取环境变量
+    model?: string;             // 默认下文的 NVIDIA 安全模型
+    rateLimit?: { maxRequests: number; intervalMs: number }; // 默认 20 次 / 60000ms
+    maxConcurrent?: number;     // 默认 1，包含等待限速额度的执行中审核
+    maxQueueSize?: number;      // 默认 100；0 表示不排队
+    timeoutMs?: number;         // 默认 30000，仅计算实际请求耗时
+    maxTokens?: number;         // 默认 512，最大输出 token 数
+    protocol?: 'auto' | 'nemotron' | 'json'; // 默认 auto
+    policy?: string;            // 可选应用规则，仅用于 JSON 协议
+    structuredOutput?: boolean; // 默认 false，仅用于支持 JSON Schema 的模型
+    fetch?: typeof globalThis.fetch; // 可选自定义请求实现
+  };
+}
+```
+
+数值配置为正整数，`maxQueueSize` 允许为 0。非法输入或配置抛出 `TypeError` / `RangeError`；超过长度或命中数上限也会抛出 `RangeError`，不会返回截断结果。
+
+## 关键词匹配与位置
 
 同时匹配原文和归一化文本：NFKC、小写、去符号/空白/零宽字符，以及 [OpenCC](https://github.com/nk2028/opencc-js) 繁简字形折叠。输入和词库采用同一规则，例如 `危-險\n詞` 可命中 `危险词`。字形折叠可能合并多义字，不做地域词汇翻译（如“軟體”→“软件”）。
 
-返回类型如下，文中类型均可从 `kirakira-iris` 导入：
-
 ```ts
 interface KeywordResult {
-  status: 'completed';
-  hit: boolean;                 // 是否命中
-  hite: boolean;                // hit 的兼容别名
-  isIllegal: boolean;           // 恒等于 hit
-  hitWord: string | null;       // 按原文位置排序后的首个命中词
-  hiteWord: string | null;      // hitWord 的兼容别名
-  comment: string;              // 首个命中的评论，或“未命中关键词。”
-  normalizeString: string;      // 完整的归一化输入
-  wordStartInSource: number;    // 首个命中在原文中的起点
-  wordEndInSource: number;      // 原文终点，不含该位置
-  wordStartInNormalize: number; // 首个命中在归一化文本中的起点
-  wordEndInNormalize: number;   // 归一化终点，不含该位置
-  matches: KeywordMatch[];      // 全部命中，未命中时为 []
+  hit: boolean;                        // 任一列表非空即为 true
+  normalizeString: string;              // 完整归一化输入
+  matchesInSource: KeywordMatch[];      // 在原文直接命中的结果
+  matchesInNormalize: KeywordMatch[];   // 在归一化文本命中的结果
 }
 
 interface KeywordMatch {
-  ruleIndex: number;            // 词库数组中的下标，从 0 开始
-  id: string | null;            // 调用者提供的规则 ID
-  category: string | null;      // 调用者提供的分类
-  hitWord: string;              // 词库中未经归一化的原词
-  hiteWord: string;             // hitWord 的兼容别名
-  comment: string;              // 规则评论，未提供时自动生成命中提示
-  matchedIn: Array<'source' | 'normalized'>; // 命中的文本维度，可同时存在
-  sourceText: string;           // 原文命中片段，包含中间被移除的间隔
-  normalizedText: string;       // 对应归一化片段；无对应位置时为 ''
-  wordStartInSource: number;
-  wordEndInSource: number;
-  wordStartInNormalize: number;
-  wordEndInNormalize: number;
+  hitWord: string;              // 词库中未经归一化的关键词
+  wordStartInSource: number;    // 原文起点
+  wordEndInSource: number;      // 原文终点，不含该位置
+  wordStartInNormalize: number; // 归一化文本起点
+  wordEndInNormalize: number;   // 归一化文本终点，不含该位置
 }
 ```
 
-`matches` 保留重叠命中；同一规则在两种文本维度的位置完全一致时合并。先按原文起点、终点排序，再按词库下标和归一化起点排序，汇总字段取第一个命中。下标均为 **UTF-16、左闭右开**，可直接用于 `slice(start, end)`。未命中时词为 `null`、下标为 `-1`；只在原文命中的纯符号词也可能没有归一化位置，此时归一化下标为 `-1`。
+两组列表独立保留重叠和重复词条命中，分别按各自文本的起点、终点排序；同一位置可出现在两组中，未命中的列表为 `[]`。下标均为 **UTF-16、左闭右开**，可直接用于 `slice(start, end)`。归一化命中也提供对应的原文范围，便于高亮；原文中的纯符号词没有归一化位置时，两个归一化下标为 `-1`。
 
-词库创建时编译为 **Aho–Corasick** 自动机，扫描为 `O(n + z)`（文本长度与命中数），位置映射和结果排序另有开销。重复使用同一实例。运行 `npm run bench` 可与逐词 `indexOf` 比较；小词库不保证 AC 更快。
+词库初始化和刷新时编译为 **Aho–Corasick** 自动机，扫描为 `O(n + z)`，位置映射和排序另有开销。重复使用同一实例。`npm run bench` 可与逐词 `indexOf` 比较；小词库不保证 AC 更快。
 
 ## AI 审查与队列
 
-默认模型：[`nvidia/nemotron-3.5-content-safety:free`](https://openrouter.ai/nvidia/nemotron-3.5-content-safety:free)。通过 `ai.model` 切换模型；NVIDIA 安全模型解析原生标签，其他模型默认解析 JSON。
-
-调用签名：`iris.aiModerate(content: string, options?: ModerateOptions): Promise<AIResult>`；`iris.moderate(content: string, options?: ModerateOptions): Promise<ModerationResult>`。`content` 为原文，空字符串或纯空白跳过 AI。
+默认模型：[`nvidia/nemotron-3.5-content-safety:free`](https://openrouter.ai/nvidia/nemotron-3.5-content-safety:free)，用 `ai.model` 切换。这个专用安全模型输出 `User Safety: safe/unsafe` 标签；普通聊天模型由 Iris 提示返回 JSON，例如 `{"status":"pass","comment":"通过"}`，其中 `status` 为 `pass` 或 `block`。两种响应统一转换为下方类型。模型区别及取消示例见[详细说明](docs/ai-and-cancellation.md)。
 
 ```ts
 interface ModerateOptions {
-  signal?: AbortSignal; // 取消本次排队、等待限速或正在执行的 AI 请求
+  signal?: AbortSignal; // 可选取消通知；例如 controller.signal 或 AbortSignal.timeout(5000)
 }
-```
 
-初始化时的 `ai` 类型为 `AIOptions`，除 `apiKey` 外均可省略：
-
-| 配置 | 类型 | 默认值 | 含义 |
-| --- | --- | --- | --- |
-| `ai.apiKey` | `string` | 必填 | 显式传入非空 OpenRouter token，不读取环境变量 |
-| `ai.model` | `string` | 上述 NVIDIA 免费模型 | OpenRouter 模型 ID |
-| `ai.protocol` | `'auto' \| 'nemotron' \| 'json'` | `'auto'` | 自动按模型 ID 选择响应解析格式，也可指定 |
-| `ai.rateLimit` | `{ maxRequests: number; intervalMs: number }` | `{ maxRequests: 20, intervalMs: 60000 }` | 滑动窗口，按每次实际 HTTP 请求计数 |
-| `ai.maxConcurrent` | `number` | `1` | 同时执行的审核数，含等待限速额度的审核 |
-| `ai.maxQueueSize` | `number` | `100` | 等待队列上限，不含正在执行的审核；0 表示不排队 |
-| `ai.timeoutMs` | `number` | `30000` | 每次请求超时，不含排队或等待限速的时间，单位毫秒 |
-| `ai.maxTokens` | `number` | `512` | 模型最大输出 token 数 |
-| `ai.policy` | `string` | 无 | 追加应用审核规则，仅支持 JSON 协议 |
-| `ai.structuredOutput` | `boolean` | `false` | 启用 JSON Schema，需要 JSON 协议及兼容模型 |
-| `ai.fetch` | `typeof globalThis.fetch` | `globalThis.fetch` | 自定义请求实现，便于接入代理或测试 |
-
-实例级 `maxInputLength: number` / `maxMatches: number` 默认 `100000` / `10000`，分别限制原文 UTF-16 长度和关键词命中数，超过抛出 `RangeError`。数值配置必须为正整数，只有 `maxQueueSize` 允许为 0；非法类型或配置会抛出 `TypeError` / `RangeError`。
-
-AI 响应与组合响应：
-
-```ts
 interface AIResult {
-  status: 'completed' | 'skipped' | 'disabled' | 'error' | 'dropped';
-  result: boolean | null;      // true 不安全，false 安全，null 尚无结论
-  needsReview: boolean;        // error / dropped 时为 true
-  comment: string;             // 审核结论或跳过、失败、丢弃原因
-  model: string;               // 配置的模型 ID，未指定时为默认模型
-  categories: string[];        // AI 返回的风险分类，无分类时为 []
-  assessments: AIAssessment[];  // 成功时恰有一个原文结果，否则为 []
+  status: 'pass' | 'block' | 'drop'; // 通过 / 未通过 / 未完成审核
+  comment: string;                 // 审核说明，或未审核的原因
+  model: string;                   // 实际响应模型 ID；无响应时为配置值或默认值
   skipReason: 'not-configured' | 'empty-input' | 'no-keyword-hit' | 'queue-full' | 'queue-cleared' | null;
-  error: AIErrorInfo | null;    // 失败或丢弃详情，其余为 null
+  error: AIErrorInfo | null;        // 失败详情；正常通过、未通过或主动跳过时为 null
 }
-
-interface AIAssessment {
-  input: 'source';
-  result: boolean;
-  comment: string;
-  categories: string[];
-  model: string;               // 服务端返回的实际模型 ID；缺失时回退到配置值
-  requestId: string | null;     // 服务端请求 ID
-}
-
-interface AIErrorInfo {
-  code: AIErrorCode;
-  message: string;             // 错误说明，不包含 token 或服务端原始错误正文
-  status: number | null;       // HTTP 状态码；非 HTTP 错误为 null
-  retryable: boolean;          // 是否适合由调用方稍后重试；库不自动重试
-}
-
-type AIErrorCode =
-  | 'MISSING_API_KEY'  // 未配置 AI 却调用 aiModerate
-  | 'HTTP_ERROR'       // 非成功 HTTP 响应
-  | 'API_ERROR'        // 服务端返回 API 错误
-  | 'INVALID_RESPONSE' // 模型返回缺失、截断或无法解析的结论
-  | 'TIMEOUT'          // 请求超时
-  | 'ABORTED'          // 调用者通过 signal 取消
-  | 'NETWORK_ERROR'    // 网络或请求实现异常
-  | 'QUEUE_FULL'       // 队列满，丢弃新审核
-  | 'QUEUE_CLEARED';   // 调用 clearAIQueue，丢弃等待中的审核
 
 interface ModerationResult {
-  isIllegal: boolean;          // keywordResult.hit || aiResult.result === true
-  needsReview: boolean;        // 等于 aiResult.needsReview
+  hit: boolean; // keywordResult.hit || aiResult.status === 'block'；AI 不会推翻关键词命中
   keywordResult: KeywordResult;
   aiResult: AIResult;
 }
-```
-
-`completed` 表示得到 AI 结论；`skipped` 表示空输入或 `moderate` 未命中关键词；`disabled` 表示 `moderate` 未配置 AI；`error` 表示审核失败或取消；`dropped` 表示队列已满或被清空。除 `completed` 外，`result` 均为 `null`。`isIllegal: false` 且 `needsReview: true` 表示尚未发现违规，但 AI 未完成审核，不能视作完整通过。
-
-配置 AI 后，`moderate` 对非空、未命中关键词的输入返回 `skipReason: 'no-keyword-hit'`、`needsReview: false`，不会进入 AI 队列或消耗请求额度；空词库同样如此。`aiModerate` 独立审查原文，不要求关键词命中。
-
-队列按实例共享，`moderate` 与 `aiModerate` 均受约束；不同实例/进程不共享额度。先进先出，满额时**丢弃新提交的审核**，返回 `status: 'dropped'`、`error.code: 'QUEUE_FULL'`、`skipReason: 'queue-full'`，不发请求。
-
-```ts
-const removed: number = iris.clearAIQueue(); // 同步清空等待队列，返回移除数量
-const stats: AIQueueStats = iris.getAIQueueStats();
 
 interface AIQueueStats {
-  active: number;        // 已占用执行槽的审核，包含等待限速额度的审核
+  active: number;        // 已占用执行槽的审核，包含等待限速的审核
   queued: number;        // 等待执行槽的审核数
   maxConcurrent: number;
   maxQueueSize: number;
 }
 ```
 
-清空后，被移除调用的 Promise 会正常返回 `status: 'dropped'`、`error.code: 'QUEUE_CLEARED'`、`skipReason: 'queue-cleared'`、`result: null`、`needsReview: true`，已完成的关键词结果保留。`clearAIQueue()` 只移除 `queued`，不取消 `active`（包括等待限速的审核），不重置限速记录；空队列返回 0，之后仍可提交新审核。需要取消执行中的某次审核时，使用该调用的 `{ signal }`。
+`pass` / `block` 表示 AI 已完成判断。空输入、未配置 AI、`moderate` 未命中关键词、取消、超时、请求失败、队列满或被清空，均为 `drop`，**不表示 AI 判定通过**。`skipReason` 说明主动跳过或队列丢弃原因；`error` 包含 `code`、`message`、HTTP `status`（可为 null）和 `retryable`，供失败排查，完整类型可在编辑器中查看。
 
-AI **只审核原文**，每次审核最多发送一次请求；归一化仅用于关键词匹配。不自动重试或切换付费模型。
+`moderate` 未命中时不会进入 AI 队列；`aiModerate` 不要求关键词命中。AI 始终只审查原文，每次最多一次请求。归一化仅用于关键词匹配。
+
+队列按实例共享，先进先出；不同实例/进程不共享限额。满额时丢弃新审核，返回 `drop` / `QUEUE_FULL`。`clearAIQueue()` 同步移除所有 `queued`，对应 Promise 返回 `drop` / `QUEUE_CLEARED`；已有关键词结果保留，`active` 继续执行，限速记录不重置。空队列返回 0，之后仍可提交新审核。
+
+`signal` 由调用者控制，可用于用户撤回、请求断开或给整个排队和审查过程设置期限。取消后返回 `drop` / `ABORTED`。`ai.timeoutMs` 仅限制实际请求耗时，超时为 `drop` / `TIMEOUT`。库不自动重试或切换付费模型。
 
 ## 构建与发布
 

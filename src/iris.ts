@@ -3,7 +3,7 @@ import { IrisAIError } from './errors.js';
 import { KeywordMatcher } from './keywords.js';
 import { normalizeText } from './normalize.js';
 import { AIScheduler } from './scheduler.js';
-import type { AIOptions, AIQueueStats, IrisOptions, Keyword, KeywordResult, ModerateOptions, ModerationResult, NormalizedText } from './types.js';
+import type { AIOptions, AIQueueStats, AIResult, IrisOptions, KeywordResult, ModerateOptions, ModerationResult, NormalizedText } from './types.js';
 
 function integer(value: number | undefined, name: string, minimum = 1): void {
   if (value !== undefined && (!Number.isSafeInteger(value) || value < minimum || value > 2_147_483_647)) {
@@ -90,18 +90,18 @@ export class Iris {
    * Replace the entire dictionary. Compile before swapping so invalid input
    * leaves the current dictionary intact. Pending AI reviews keep their keyword results.
    */
-  refreshKeywords(keywords: readonly Keyword[]): void {
+  refreshKeywords(keywords: readonly string[]): void {
     const next = new KeywordMatcher(keywords);
     this.matcher = next;
   }
 
-  /** Synchronous and local. Every keyword hit is illegal. */
+  /** Synchronous and local. Returns independent source and normalized matches. */
   keywordModerate(input: string): KeywordResult {
     return this.matcher.check(this.normalize(input), this.maxMatches);
   }
 
   /** AI only. Does not consult the keyword matcher. */
-  async aiModerate(input: string, options: ModerateOptions = {}) {
+  async aiModerate(input: string, options: ModerateOptions = {}): Promise<AIResult> {
     this.validateInput(input);
     if (!input.trim()) return emptyAIResult(this.ai, 'empty-input');
     return this.review(input, options.signal);
@@ -119,8 +119,7 @@ export class Iris {
       : !keywordResult.hit ? emptyAIResult(this.ai, 'no-keyword-hit')
       : await this.review(input, options.signal);
     return {
-      isIllegal: keywordResult.hit || aiResult.result === true,
-      needsReview: aiResult.needsReview, keywordResult, aiResult,
+      hit: keywordResult.hit || aiResult.status === 'block', keywordResult, aiResult,
     };
   }
 

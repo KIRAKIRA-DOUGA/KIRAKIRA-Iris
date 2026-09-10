@@ -44,7 +44,9 @@ for (const size of [10, 1000, 10_000]) {
   };
   assert.equal(scan(), naive());
   const iris = createIris({ keywords: words });
-  assert.equal(iris.keywordModerate(input).matches.length, scan());
+  const result = iris.keywordModerate(input);
+  assert.equal(result.matchesInSource.length, scan());
+  assert.equal(result.matchesInNormalize.length, scan());
   results.push({
     keywords: size, utf16Length: input.length, matches: scan(),
     buildMs, ahoCorasickMs: median(scan), indexOfPerWordMs: median(naive),
