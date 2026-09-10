@@ -1,6 +1,6 @@
 # KIRAKIRA-Iris
 
-KIRAKIRA 的内容审核模块，以 Node.js 包分发。支持 TypeScript、ESM 和 CommonJS。需要 Node.js 22 以上版本。
+以 Node.js 包分发的 KIRAKIRA 内容审核模块，支持 TypeScript、ESM 和 CommonJS，需要 Node.js 22 以上版本。
 
 出于安全考虑，不提供屏蔽词库，您可以在以下开源存储库中自行获取。  
 | 存储库 | 网址 |
@@ -27,7 +27,7 @@ const keywords = ['badword1', 'badword2']
 const iris = createIris({
   keywords,
   ai: { // 可选的
-    apiKey: 'your-openrouter-token',
+    apiKey: 'your-openrouter-api-key',
     rateLimit: { maxRequests: 20, intervalMs: 60_000 },
     maxConcurrent: 1,
     maxQueueSize: 100,
@@ -40,9 +40,11 @@ const keyword = iris.keywordModerate(content);  // 只使用关键词审查
 const ai = await iris.aiModerate(content);      // 只使用 AI 审查
 
 ```
-更新词库时
+
+当词库更新时：
 ```ts
 // 放在你的词库更新回调或管理接口中，按需调用。
+// newKeywords 是全量关键词而不是新增部分。
 function onKeywordsUpdated(newKeywords: string[]) {
   iris.refreshKeywords(newKeywords);
 }
@@ -50,7 +52,7 @@ function onKeywordsUpdated(newKeywords: string[]) {
 
 刷新是同步操作，校验和编译成功后才切换；失败时保留原词库。传入 `[]` 可清空。已提交或排队的审核保留原关键词结果，之后的调用使用新词库。
 
-## 匹配与位置
+## 关键词匹配与位置
 
 同时匹配原文和归一化文本：NFKC、小写、去符号/空白/零宽字符，以及 [OpenCC](https://github.com/nk2028/opencc-js) 繁简字形折叠。输入和词库采用同一规则，例如 `危-險\n詞` 可命中 `危险词`。字形折叠可能合并多义字，不做地域词汇翻译（如“軟體”→“软件”）。
 
@@ -58,7 +60,7 @@ function onKeywordsUpdated(newKeywords: string[]) {
 
 词库创建时编译为 **Aho–Corasick** 自动机，扫描为 `O(n + z)`（文本长度与命中数），位置映射和结果排序另有开销。重复使用同一实例。运行 `npm run bench` 可与逐词 `indexOf` 比较；小词库不保证 AC 更快。
 
-## AI 与队列
+## AI 审查与队列
 
 默认模型：[`nvidia/nemotron-3.5-content-safety:free`](https://openrouter.ai/nvidia/nemotron-3.5-content-safety:free)。通过 `ai.model` 切换模型；NVIDIA 安全模型解析原生标签，其他模型默认解析 JSON。
 
@@ -85,6 +87,5 @@ npm run release     # 验证后发布 npm
 
 也可配置 npm [Trusted Publisher](https://docs.npmjs.com/trusted-publishers/)：组织 `KIRAKIRA-DOUGA`、仓库 `KIRAKIRA-Iris`、工作流 `publish.yml`，允许直接发布；或配置仓库 Secret `NPM_TOKEN`。创建与包版本一致的 `vX.Y.Z` GitHub Release 后自动发布，Actions 手动运行需选择对应 tag。
 
-0.2.0 移除了分级、过滤开关、环境变量读取和旧 `checkKeywords` 方法。关键词调用请改为 `keywordModerate`。
 
 BSD-3-Clause。
