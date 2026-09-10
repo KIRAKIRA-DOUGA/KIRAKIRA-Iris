@@ -43,7 +43,7 @@ test('refresh preserves in-flight and queued results, and subsequent calls use t
   const firstRequest = deferred();
   const calls = [];
   const iris = createIris({ keywords: ['旧词'], ai: {
-    apiKey: 'test-token',
+    apiKey: 'test-token', maxConcurrent: 1,
     fetch: async (_url, init) => {
       calls.push(JSON.parse(init.body).messages[0].content);
       return calls.length === 1 ? firstRequest.promise : reply();

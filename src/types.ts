@@ -77,7 +77,7 @@ export interface AIOptions {
   maxTokens?: number;
   /** Default 20 requests per 60,000ms; shared by both AI-capable methods. */
   rateLimit?: AIRateLimit;
-  /** Maximum simultaneous review jobs, including jobs waiting for rate allowance. Default 1. */
+  /** Maximum simultaneous review jobs, including jobs waiting for rate allowance. Default 3. */
   maxConcurrent?: number;
   /** Waiting jobs excluding running jobs. Default 100; 0 disables waiting. */
   maxQueueSize?: number;

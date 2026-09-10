@@ -58,7 +58,7 @@ export class Iris {
     }
     this.matcher = new KeywordMatcher(options.keywords ?? []);
     this.scheduler = new AIScheduler({
-      maxConcurrent: this.ai?.maxConcurrent ?? 1,
+      maxConcurrent: this.ai?.maxConcurrent ?? 3,
       maxQueueSize: this.ai?.maxQueueSize ?? 100,
       rateLimit: this.ai?.rateLimit ?? { maxRequests: 20, intervalMs: 60_000 },
     });

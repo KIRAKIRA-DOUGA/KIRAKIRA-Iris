@@ -112,27 +112,29 @@ test('FIFO jobs share concurrency between moderate and aiModerate; overflow drop
   assert.equal(iris.getAIQueueStats().queued, 0);
 });
 
-test('parallel reviewers respect maxConcurrent and a zero-length waiting queue', async () => {
+test('parallel reviewers default to three concurrent requests and respect a zero-length waiting queue', async () => {
   const pending = [];
-  const iris = createIris({ ai: { apiKey: 'token', maxConcurrent: 2, maxQueueSize: 0,
+  const iris = createIris({ ai: { apiKey: 'token', maxQueueSize: 0,
     fetch: async () => { const request = deferred(); pending.push(request); return request.promise; },
   } });
   const first = iris.aiModerate('first');
   const second = iris.aiModerate('second');
-  const third = await iris.aiModerate('third');
+  const third = iris.aiModerate('third');
+  const fourth = await iris.aiModerate('fourth');
   await flush();
-  assert.equal(third.status, 'drop');
-  assert.equal(pending.length, 2);
-  assert.equal(iris.getAIQueueStats().active, 2);
+  assert.equal(fourth.status, 'drop');
+  assert.equal(fourth.error.code, 'QUEUE_FULL');
+  assert.equal(pending.length, 3);
+  assert.equal(iris.getAIQueueStats().active, 3);
   for (const request of pending) request.resolve(reply());
-  await Promise.all([first, second]);
+  await Promise.all([first, second, third]);
   assert.equal(iris.getAIQueueStats().active, 0);
 });
 
 test('cancelling a queued job frees capacity immediately and never submits it', async () => {
   const firstRequest = deferred();
   const calls = [];
-  const iris = createIris({ ai: { apiKey: 'token', maxQueueSize: 1,
+  const iris = createIris({ ai: { apiKey: 'token', maxConcurrent: 1, maxQueueSize: 1,
     fetch: async (_url, init) => {
       calls.push(JSON.parse(init.body).messages[0].content);
       return calls.length === 1 ? firstRequest.promise : reply();
@@ -154,7 +156,7 @@ test('cancelling a queued job frees capacity immediately and never submits it', 
 test('failed or timed-out work frees concurrency slots for the next queued job', async () => {
   for (const initial of ['network', 'timeout']) {
     let count = 0;
-    const iris = createIris({ ai: { apiKey: 'token', timeoutMs: 15,
+    const iris = createIris({ ai: { apiKey: 'token', maxConcurrent: 1, timeoutMs: 15,
       fetch: async () => {
         if (count++) return reply();
         if (initial === 'network') throw new Error('network');
@@ -202,7 +204,7 @@ test('rate limiting is independent for different Iris instances', async () => {
 test('clearing the shared queue settles every discarded review, preserves keyword hits and allows refilling', async () => {
   const firstRequest = deferred();
   const calls = [];
-  const iris = createIris({ keywords: ['命中'], ai: { apiKey: 'token', maxQueueSize: 2,
+  const iris = createIris({ keywords: ['命中'], ai: { apiKey: 'token', maxConcurrent: 1, maxQueueSize: 2,
     fetch: async (_url, init) => {
       calls.push(JSON.parse(init.body).messages[0].content);
       return calls.length === 1 ? firstRequest.promise : reply();

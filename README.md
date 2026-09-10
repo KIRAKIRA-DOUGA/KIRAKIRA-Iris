@@ -80,7 +80,7 @@ interface IrisOptions {
     apiKey: string;             // 必须显式传入，不读取环境变量
     model?: string;             // 默认下文的 NVIDIA 安全模型
     rateLimit?: { maxRequests: number; intervalMs: number }; // 默认最近 60000ms 内最多发出 20 次请求
-    maxConcurrent?: number;     // 默认 1，同时执行的 AI 审核数量上限
+    maxConcurrent?: number;     // 默认 3，同时执行的 AI 审核数量上限
     maxQueueSize?: number;      // 默认 100；0 表示不排队
     timeoutMs?: number;         // 默认 30000，仅计算实际请求耗时
     maxTokens?: number;         // 默认 512，最大输出 token 数

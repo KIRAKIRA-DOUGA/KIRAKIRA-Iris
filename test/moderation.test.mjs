@@ -42,7 +42,7 @@ test('unmatched content bypasses a full AI queue and consumes no request quota',
   const firstRequest = deferred();
   const calls = [];
   const iris = createIris({ keywords: ['命中'], ai: {
-    apiKey: 'token', maxQueueSize: 0, rateLimit: { maxRequests: 2, intervalMs: 60_000 },
+    apiKey: 'token', maxConcurrent: 1, maxQueueSize: 0, rateLimit: { maxRequests: 2, intervalMs: 60_000 },
     fetch: async (_url, init) => {
       calls.push(JSON.parse(init.body).messages[0].content);
       return calls.length === 1 ? firstRequest.promise : reply();
