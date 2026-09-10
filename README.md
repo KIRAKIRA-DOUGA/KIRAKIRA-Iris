@@ -146,7 +146,7 @@ interface AIResult {
   model: string;               // 配置的模型 ID，未指定时为默认模型
   categories: string[];        // AI 返回的风险分类，无分类时为 []
   assessments: AIAssessment[];  // 成功时恰有一个原文结果，否则为 []
-  skipReason: 'not-configured' | 'empty-input' | 'queue-full' | 'queue-cleared' | null;
+  skipReason: 'not-configured' | 'empty-input' | 'no-keyword-hit' | 'queue-full' | 'queue-cleared' | null;
   error: AIErrorInfo | null;    // 失败或丢弃详情，其余为 null
 }
 
@@ -185,7 +185,9 @@ interface ModerationResult {
 }
 ```
 
-`completed` 表示得到 AI 结论；`skipped` 表示空输入；`disabled` 表示 `moderate` 未配置 AI；`error` 表示审核失败或取消；`dropped` 表示队列已满或被清空。除 `completed` 外，`result` 均为 `null`。`isIllegal: false` 且 `needsReview: true` 表示尚未发现违规，但 AI 未完成审核，不能视作完整通过。
+`completed` 表示得到 AI 结论；`skipped` 表示空输入或 `moderate` 未命中关键词；`disabled` 表示 `moderate` 未配置 AI；`error` 表示审核失败或取消；`dropped` 表示队列已满或被清空。除 `completed` 外，`result` 均为 `null`。`isIllegal: false` 且 `needsReview: true` 表示尚未发现违规，但 AI 未完成审核，不能视作完整通过。
+
+配置 AI 后，`moderate` 对非空、未命中关键词的输入返回 `skipReason: 'no-keyword-hit'`、`needsReview: false`，不会进入 AI 队列或消耗请求额度；空词库同样如此。`aiModerate` 独立审查原文，不要求关键词命中。
 
 队列按实例共享，`moderate` 与 `aiModerate` 均受约束；不同实例/进程不共享额度。先进先出，满额时**丢弃新提交的审核**，返回 `status: 'dropped'`、`error.code: 'QUEUE_FULL'`、`skipReason: 'queue-full'`，不发请求。
 

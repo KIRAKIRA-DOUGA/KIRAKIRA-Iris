@@ -85,7 +85,7 @@ export interface AIResult {
   model: string;
   categories: string[];
   assessments: AIAssessment[];
-  skipReason: 'not-configured' | 'empty-input' | 'queue-full' | 'queue-cleared' | null;
+  skipReason: 'not-configured' | 'empty-input' | 'no-keyword-hit' | 'queue-full' | 'queue-cleared' | null;
   error: AIErrorInfo | null;
 }
 

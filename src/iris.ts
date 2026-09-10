@@ -107,7 +107,7 @@ export class Iris {
     return this.review(input, options.signal);
   }
 
-  /** Run keywords and optional AI independently. AI cannot clear a keyword hit. */
+  /** Always check keywords; only hits trigger optional AI, which cannot clear a keyword hit. */
   async moderate(input: string, options: ModerateOptions = {}): Promise<ModerationResult> {
     for (const key of ['keywordFilter', 'aiFilter']) {
       if (key in options) throw new TypeError(`${key} was removed; choose the appropriate moderation method.`);
@@ -116,6 +116,7 @@ export class Iris {
     const keywordResult = this.matcher.check(text, this.maxMatches);
     const aiResult = !this.ai ? emptyAIResult(undefined, 'not-configured')
       : !input.trim() ? emptyAIResult(this.ai, 'empty-input')
+      : !keywordResult.hit ? emptyAIResult(this.ai, 'no-keyword-hit')
       : await this.review(input, options.signal);
     return {
       isIllegal: keywordResult.hit || aiResult.result === true,

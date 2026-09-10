@@ -160,7 +160,8 @@ async function requestAssessment(
 export function emptyAIResult(options: AIOptions | undefined, reason: AIResult['skipReason']): AIResult {
   return {
     status: reason === 'not-configured' ? 'disabled' : 'skipped', result: null, needsReview: false,
-    comment: reason === 'not-configured' ? '未配置 AI。' : reason === 'empty-input' ? '输入为空，跳过 AI 审核。' : '跳过 AI 审核。',
+    comment: reason === 'not-configured' ? '未配置 AI。' : reason === 'empty-input' ? '输入为空，跳过 AI 审核。'
+      : reason === 'no-keyword-hit' ? '未命中关键词，跳过 AI 审核。' : '跳过 AI 审核。',
     model: options?.model ?? DEFAULT_AI_MODEL, categories: [], assessments: [], skipReason: reason, error: null,
   };
 }

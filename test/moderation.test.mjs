@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createIris } from '../dist/esm/index.js';
-import { mockFetch, reply } from './helpers.mjs';
+import { deferred, flush, mockFetch, reply } from './helpers.mjs';
 
 test('keywordModerate is synchronous and never invokes AI', () => {
   const mock = mockFetch();
@@ -24,29 +24,48 @@ test('moderate always rejects every keyword hit even when AI reports safe', asyn
   assert.equal(mock.calls.length, 2);
 });
 
-test('combined review consults AI without keyword hits, including an empty dictionary', async () => {
+test('combined review skips AI without keyword hits, including an empty dictionary', async () => {
   for (const keywords of [[], ['命中']]) {
-    for (const unsafe of [false, true]) {
-      const mock = mockFetch(reply(`User Safety: ${unsafe ? 'unsafe' : 'safe'}`));
-      const result = await createIris({ keywords, ai: { apiKey: 'token', fetch: mock.fetch } }).moderate('user-content');
-      assert.equal(result.keywordResult.hit, false);
-      assert.equal(result.isIllegal, unsafe);
-      assert.equal(result.aiResult.result, unsafe);
-      assert.equal(result.aiResult.status, 'completed');
-      assert.equal(result.aiResult.skipReason, null);
-      assert.equal(mock.calls.length, 1);
-      assert.equal(mock.calls[0].body.messages[0].content, 'user-content');
-    }
+    const mock = mockFetch(reply('User Safety: unsafe'));
+    const result = await createIris({ keywords, ai: { apiKey: 'token', fetch: mock.fetch } }).moderate('user-content');
+    assert.equal(result.keywordResult.hit, false);
+    assert.equal(result.isIllegal, false);
+    assert.equal(result.aiResult.result, null);
+    assert.equal(result.aiResult.status, 'skipped');
+    assert.equal(result.aiResult.skipReason, 'no-keyword-hit');
+    assert.equal(result.aiResult.comment, '未命中关键词，跳过 AI 审核。');
+    assert.equal(result.aiResult.error, null);
+    assert.deepEqual(result.aiResult.assessments, []);
+    assert.equal(result.needsReview, false);
+    assert.equal(mock.calls.length, 0);
   }
 });
 
-test('AI failure without keyword hits still requires review', async () => {
-  const result = await createIris({ ai: { apiKey: 'token', fetch: mockFetch(new Error('offline')).fetch } }).moderate('user-content');
-  assert.equal(result.keywordResult.hit, false);
-  assert.equal(result.isIllegal, false);
-  assert.equal(result.aiResult.result, null);
-  assert.equal(result.aiResult.error.code, 'NETWORK_ERROR');
-  assert.equal(result.needsReview, true);
+test('unmatched content bypasses a full AI queue and consumes no request quota', async () => {
+  const firstRequest = deferred();
+  const calls = [];
+  const iris = createIris({ keywords: ['命中'], ai: {
+    apiKey: 'token', maxQueueSize: 0, rateLimit: { maxRequests: 2, intervalMs: 60_000 },
+    fetch: async (_url, init) => {
+      calls.push(JSON.parse(init.body).messages[0].content);
+      return calls.length === 1 ? firstRequest.promise : reply();
+    },
+  } });
+  const active = iris.aiModerate('active');
+  await flush();
+  const before = iris.getAIQueueStats();
+  const unmatched = await iris.moderate('正常');
+  assert.equal(unmatched.aiResult.status, 'skipped');
+  assert.equal(unmatched.aiResult.skipReason, 'no-keyword-hit');
+  assert.equal(unmatched.aiResult.error, null);
+  assert.equal(unmatched.needsReview, false);
+  assert.deepEqual(iris.getAIQueueStats(), before);
+  firstRequest.resolve(reply());
+  await active;
+  const matched = await iris.moderate('命中', { signal: AbortSignal.timeout(1_000) });
+  assert.equal(matched.aiResult.status, 'completed');
+  assert.equal(matched.isIllegal, true);
+  assert.deepEqual(calls, ['active', '命中']);
 });
 
 test('combined moderation normalizes keyword matching but sends only the source to AI', async () => {

@@ -61,19 +61,19 @@ test('refresh preserves in-flight and queued results, and subsequent calls use t
   assert.equal(stats.queued, 1);
   iris.refreshKeywords(['新词']);
   assert.deepEqual(iris.getAIQueueStats(), stats);
-  const afterRefresh = iris.moderate('旧词');
-  assert.equal(iris.getAIQueueStats().queued, 2);
+  const after = await iris.moderate('旧词');
+  assert.equal(after.keywordResult.hit, false);
+  assert.equal(after.aiResult.status, 'skipped');
+  assert.equal(after.aiResult.skipReason, 'no-keyword-hit');
+  assert.equal(after.isIllegal, false);
+  assert.deepEqual(iris.getAIQueueStats(), stats);
   firstRequest.resolve(reply());
   for (const result of await Promise.all([first, queued])) {
     assert.equal(result.keywordResult.hitWord, '旧词');
     assert.equal(result.aiResult.result, false);
     assert.equal(result.isIllegal, true);
   }
-  const after = await afterRefresh;
-  assert.equal(after.keywordResult.hit, false);
-  assert.equal(after.aiResult.status, 'completed');
-  assert.equal(after.isIllegal, false);
   assert.equal((await iris.moderate('新词')).isIllegal, true);
-  assert.deepEqual(calls, ['旧词', '旧词', '旧词', '新词']);
+  assert.deepEqual(calls, ['旧词', '旧词', '新词']);
   assert.equal(iris.getAIQueueStats().active, 0);
 });
