@@ -24,15 +24,29 @@ test('moderate always rejects every keyword hit even when AI reports safe', asyn
   assert.equal(mock.calls.length, 2);
 });
 
-test('no-hit and empty-dictionary moderate calls never submit AI', async () => {
+test('combined review consults AI without keyword hits, including an empty dictionary', async () => {
   for (const keywords of [[], ['命中']]) {
-    const mock = mockFetch();
-    const result = await createIris({ keywords, ai: { apiKey: 'token', fetch: mock.fetch } }).moderate('正常');
-    assert.equal(result.isIllegal, false);
-    assert.equal(result.aiResult.status, 'skipped');
-    assert.equal(result.aiResult.skipReason, 'no-keyword-hit');
-    assert.equal(mock.calls.length, 0);
+    for (const unsafe of [false, true]) {
+      const mock = mockFetch(reply(`User Safety: ${unsafe ? 'unsafe' : 'safe'}`));
+      const result = await createIris({ keywords, ai: { apiKey: 'token', fetch: mock.fetch } }).moderate('user-content');
+      assert.equal(result.keywordResult.hit, false);
+      assert.equal(result.isIllegal, unsafe);
+      assert.equal(result.aiResult.result, unsafe);
+      assert.equal(result.aiResult.status, 'completed');
+      assert.equal(result.aiResult.skipReason, null);
+      assert.equal(mock.calls.length, 1);
+      assert.equal(mock.calls[0].body.messages[0].content, 'user-content');
+    }
   }
+});
+
+test('AI failure without keyword hits still requires review', async () => {
+  const result = await createIris({ ai: { apiKey: 'token', fetch: mockFetch(new Error('offline')).fetch } }).moderate('user-content');
+  assert.equal(result.keywordResult.hit, false);
+  assert.equal(result.isIllegal, false);
+  assert.equal(result.aiResult.result, null);
+  assert.equal(result.aiResult.error.code, 'NETWORK_ERROR');
+  assert.equal(result.needsReview, true);
 });
 
 test('combined moderation normalizes keyword matching but sends only the source to AI', async () => {
@@ -97,10 +111,16 @@ test('environment credentials are never read, including a throwing getter', asyn
   } finally { process.env = originalEnv; }
 });
 
-test('empty and whitespace AI-only calls are skipped without network requests', async () => {
+test('empty and whitespace calls skip AI without network requests', async () => {
   const mock = mockFetch();
   const iris = createIris({ ai: { apiKey: 'token', fetch: mock.fetch } });
-  for (const content of ['', ' \r\n\t']) assert.equal((await iris.aiModerate(content)).skipReason, 'empty-input');
+  for (const content of ['', ' \r\n\t']) {
+    assert.equal((await iris.aiModerate(content)).skipReason, 'empty-input');
+    const combined = await iris.moderate(content);
+    assert.equal(combined.aiResult.skipReason, 'empty-input');
+    assert.equal(combined.keywordResult.hit, false);
+    assert.equal(combined.isIllegal, false);
+  }
   assert.equal(mock.calls.length, 0);
 });
 

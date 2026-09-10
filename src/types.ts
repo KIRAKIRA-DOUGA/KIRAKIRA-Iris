@@ -67,7 +67,7 @@ export interface AIAssessment extends ParsedAIResult {
 }
 
 export type AIErrorCode = 'MISSING_API_KEY' | 'HTTP_ERROR' | 'API_ERROR'
-  | 'INVALID_RESPONSE' | 'TIMEOUT' | 'ABORTED' | 'NETWORK_ERROR' | 'QUEUE_FULL';
+  | 'INVALID_RESPONSE' | 'TIMEOUT' | 'ABORTED' | 'NETWORK_ERROR' | 'QUEUE_FULL' | 'QUEUE_CLEARED';
 
 export interface AIErrorInfo {
   code: AIErrorCode;
@@ -85,7 +85,7 @@ export interface AIResult {
   model: string;
   categories: string[];
   assessments: AIAssessment[];
-  skipReason: 'not-configured' | 'no-keyword-hit' | 'empty-input' | 'queue-full' | null;
+  skipReason: 'not-configured' | 'empty-input' | 'queue-full' | 'queue-cleared' | null;
   error: AIErrorInfo | null;
 }
 

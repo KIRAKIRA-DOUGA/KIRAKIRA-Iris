@@ -5,7 +5,8 @@ const iris = createIris({ keywords, ai: { apiKey: 'explicit-token', rateLimit: {
 const both: ModerationResult = await iris.moderate('example');
 const keyword: KeywordResult = iris.keywordModerate('example');
 const ai: AIResult = await iris.aiModerate('example');
-void [both, keyword, ai];
+const cleared: number = iris.clearAIQueue();
+void [both, keyword, ai, cleared];
 const refreshedWords: string[] = ['新的关键词'];
 iris.refreshKeywords(refreshedWords);
 iris.refreshKeywords(['只读关键词'] as const);

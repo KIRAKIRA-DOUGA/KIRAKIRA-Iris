@@ -16,6 +16,7 @@ interface Clock {
 
 interface WaitingJob {
   start(): void;
+  cancel(error: IrisAIError): void;
 }
 
 interface RequestWaiter {
@@ -46,18 +47,28 @@ export class AIScheduler {
     };
   }
 
+  /** Drop waiting jobs and settle their promises without changing active work or quota. */
+  clearQueue(): number {
+    const jobs = [...this.pending];
+    this.pending.clear();
+    const error = new IrisAIError('QUEUE_CLEARED', 'AI 等待队列已清空，本次审核已放弃。');
+    for (const job of jobs) job.cancel(error);
+    return jobs.length;
+  }
+
   run<T>(work: () => Promise<T>, signal?: AbortSignal): Promise<T> {
     if (signal?.aborted) return Promise.reject(aborted());
     if (this.active >= this.options.maxConcurrent && this.pending.size >= this.options.maxQueueSize) {
       return Promise.reject(new IrisAIError('QUEUE_FULL', 'AI 等待队列已满，本次审核已放弃。', null, true));
     }
     return new Promise<T>((resolve, reject) => {
-      const cancel = (): void => {
-        this.pending.delete(job);
-        signal?.removeEventListener('abort', cancel);
-        reject(aborted());
-      };
+      const cancel = (): void => job.cancel(aborted());
       const job: WaitingJob = {
+        cancel: error => {
+          this.pending.delete(job);
+          signal?.removeEventListener('abort', cancel);
+          reject(error);
+        },
         start: () => {
           signal?.removeEventListener('abort', cancel);
           this.active++;

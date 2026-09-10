@@ -160,16 +160,17 @@ async function requestAssessment(
 export function emptyAIResult(options: AIOptions | undefined, reason: AIResult['skipReason']): AIResult {
   return {
     status: reason === 'not-configured' ? 'disabled' : 'skipped', result: null, needsReview: false,
-    comment: reason === 'not-configured' ? '未配置 AI。' : reason === 'empty-input' ? '输入为空，跳过 AI 审核。' : '未命中关键词，跳过 AI 审核。',
+    comment: reason === 'not-configured' ? '未配置 AI。' : reason === 'empty-input' ? '输入为空，跳过 AI 审核。' : '跳过 AI 审核。',
     model: options?.model ?? DEFAULT_AI_MODEL, categories: [], assessments: [], skipReason: reason, error: null,
   };
 }
 
 export function failedAIResult(options: AIOptions | undefined, error: unknown): AIResult {
   const known = error instanceof IrisAIError ? error : new IrisAIError('NETWORK_ERROR', 'AI 审核失败。', null, true);
+  const dropReason = known.code === 'QUEUE_FULL' ? 'queue-full' : known.code === 'QUEUE_CLEARED' ? 'queue-cleared' : null;
   return {
-    ...emptyAIResult(options, known.code === 'QUEUE_FULL' ? 'queue-full' : null),
-    status: known.code === 'QUEUE_FULL' ? 'dropped' : 'error', needsReview: true,
+    ...emptyAIResult(options, dropReason),
+    status: dropReason ? 'dropped' : 'error', needsReview: true,
     error: known.toJSON(), comment: known.message,
   };
 }

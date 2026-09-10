@@ -107,7 +107,7 @@ export class Iris {
     return this.review(input, options.signal);
   }
 
-  /** Keywords always run. Every hit triggers optional AI, which cannot clear the hit. */
+  /** Run keywords and optional AI independently. AI cannot clear a keyword hit. */
   async moderate(input: string, options: ModerateOptions = {}): Promise<ModerationResult> {
     for (const key of ['keywordFilter', 'aiFilter']) {
       if (key in options) throw new TypeError(`${key} was removed; choose the appropriate moderation method.`);
@@ -115,7 +115,7 @@ export class Iris {
     const text = this.normalize(input);
     const keywordResult = this.matcher.check(text, this.maxMatches);
     const aiResult = !this.ai ? emptyAIResult(undefined, 'not-configured')
-      : !keywordResult.hit ? emptyAIResult(this.ai, 'no-keyword-hit')
+      : !input.trim() ? emptyAIResult(this.ai, 'empty-input')
       : await this.review(input, options.signal);
     return {
       isIllegal: keywordResult.hit || aiResult.result === true,
@@ -125,6 +125,11 @@ export class Iris {
 
   getAIQueueStats(): AIQueueStats {
     return this.scheduler.stats;
+  }
+
+  /** Drop waiting AI reviews; returns the count. Active reviews and rate limits are retained. */
+  clearAIQueue(): number {
+    return this.scheduler.clearQueue();
   }
 }
 

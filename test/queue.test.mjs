@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { getEventListeners } from 'node:events';
 import { createIris } from '../dist/esm/index.js';
 import { AIScheduler } from '../dist/esm/scheduler.js';
 import { deferred, flush, mockFetch, reply } from './helpers.mjs';
@@ -199,4 +200,91 @@ test('rate limiting is independent for different Iris instances', async () => {
   const options = { ai: { apiKey: 'token', rateLimit: { maxRequests: 1, intervalMs: 60_000 }, fetch: mockFetch().fetch } };
   const results = await Promise.all([createIris(options).aiModerate('one'), createIris(options).aiModerate('two')]);
   assert.deepEqual(results.map(result => result.status), ['completed', 'completed']);
+});
+
+test('clearing the shared queue settles every discarded review, preserves keyword hits and allows refilling', async () => {
+  const firstRequest = deferred();
+  const calls = [];
+  const iris = createIris({ keywords: ['命中'], ai: { apiKey: 'token', maxQueueSize: 2,
+    fetch: async (_url, init) => {
+      calls.push(JSON.parse(init.body).messages[0].content);
+      return calls.length === 1 ? firstRequest.promise : reply();
+    },
+  } });
+  const active = iris.aiModerate('active');
+  const combined = iris.moderate('命中');
+  const controller = new AbortController();
+  const queued = iris.aiModerate('discarded', { signal: controller.signal });
+  await flush();
+  assert.deepEqual(calls, ['active']);
+  assert.equal(getEventListeners(controller.signal, 'abort').length, 1);
+
+  assert.equal(iris.clearAIQueue(), 2);
+  assert.deepEqual(iris.getAIQueueStats(), { active: 1, queued: 0, maxConcurrent: 1, maxQueueSize: 2 });
+  assert.equal(getEventListeners(controller.signal, 'abort').length, 0);
+  assert.equal(iris.clearAIQueue(), 0);
+  const [combinedResult, aiResult] = await Promise.all([combined, queued]);
+  for (const result of [combinedResult.aiResult, aiResult]) {
+    assert.equal(result.status, 'dropped');
+    assert.equal(result.result, null);
+    assert.equal(result.skipReason, 'queue-cleared');
+    assert.equal(result.needsReview, true);
+    assert.deepEqual(result.error, {
+      code: 'QUEUE_CLEARED', message: 'AI 等待队列已清空，本次审核已放弃。', status: null, retryable: false,
+    });
+    assert.deepEqual(result.assessments, []);
+  }
+  assert.equal(combinedResult.keywordResult.hit, true);
+  assert.equal(combinedResult.isIllegal, true);
+  assert.equal(combinedResult.needsReview, true);
+  controller.abort();
+  const replacement = iris.aiModerate('replacement');
+  assert.equal(iris.getAIQueueStats().queued, 1);
+  firstRequest.resolve(reply());
+  const completed = await Promise.all([active, replacement]);
+  assert.deepEqual(completed.map(result => result.status), ['completed', 'completed']);
+  assert.deepEqual(calls, ['active', 'replacement']);
+  assert.equal(iris.getAIQueueStats().active, 0);
+});
+
+test('clearing before work starts retains active concurrency slots and never starts discarded jobs', async () => {
+  const mock = mockFetch();
+  const iris = createIris({ ai: { apiKey: 'token', fetch: mock.fetch, maxConcurrent: 2 } });
+  const first = iris.aiModerate('first');
+  const second = iris.aiModerate('second');
+  const discarded = iris.aiModerate('discarded');
+  assert.equal(iris.clearAIQueue(), 1);
+  assert.equal(iris.getAIQueueStats().active, 2);
+  assert.equal((await discarded).error.code, 'QUEUE_CLEARED');
+  await Promise.all([first, second]);
+  assert.deepEqual(mock.calls.map(call => call.body.messages[0].content), ['first', 'second']);
+  assert.equal(iris.clearAIQueue(), 0);
+  assert.equal(createIris().clearAIQueue(), 0);
+});
+
+test('clearing keeps active rate-limited reviews and their existing request quota', async () => {
+  const clock = new ManualClock();
+  const scheduler = new AIScheduler({ maxConcurrent: 1, maxQueueSize: 2, rateLimit: { maxRequests: 1, intervalMs: 100 } }, clock);
+  const starts = [];
+  const run = label => scheduler.run(async () => {
+    await scheduler.acquireRequest();
+    starts.push([label, clock.now()]);
+  });
+  await run('initial');
+  const active = run('rate-limited');
+  const discarded = assert.rejects(run('discarded'), { code: 'QUEUE_CLEARED' });
+  await flush();
+  assert.equal(clock.timers.size, 1);
+  assert.equal(scheduler.clearQueue(), 1);
+  await discarded;
+  assert.equal(scheduler.stats.active, 1);
+  assert.equal(scheduler.stats.queued, 0);
+  assert.equal(clock.timers.size, 1);
+  clock.advance(99);
+  await flush();
+  assert.deepEqual(starts, [['initial', 0]]);
+  clock.advance(1);
+  await active;
+  assert.deepEqual(starts, [['initial', 0], ['rate-limited', 100]]);
+  assert.equal(clock.timers.size, 0);
 });
